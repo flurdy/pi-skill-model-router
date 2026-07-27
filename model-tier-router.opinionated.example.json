@@ -1,0 +1,50 @@
+{
+  "enabled": true,
+  "routeImplicitSkillReads": true,
+  "usageLedger": {
+    "enabled": true,
+    "retentionDays": 30,
+    "maxBytes": 10485760
+  },
+  "modelPolicies": {
+    "openai-codex/gpt-5.6-luna": { "metered": false },
+    "anthropic/claude-haiku-4-5": { "metered": true },
+    "google/gemini-3.5-flash": { "metered": true },
+    "openai-codex/gpt-5.6-terra": { "metered": false },
+    "anthropic/claude-sonnet-5": { "metered": true },
+    "openai-codex/gpt-5.6-sol": { "metered": false },
+    "anthropic/claude-fable-5": { "metered": true },
+    "anthropic/claude-opus-4-8": { "metered": true }
+  },
+  "tiers": {
+    "economy": {
+      "rank": 10,
+      "thinking": "medium",
+      "selection": "weighted-random",
+      "candidates": [
+        { "model": "openai-codex/gpt-5.6-luna", "weight": 6 },
+        { "model": "anthropic/claude-haiku-4-5", "weight": 1 },
+        { "model": "google/gemini-3.5-flash", "weight": 1 }
+      ]
+    },
+    "standard": {
+      "rank": 20,
+      "thinking": "medium",
+      "selection": "weighted-random",
+      "candidates": [
+        { "model": "openai-codex/gpt-5.6-terra", "weight": 3 },
+        { "model": "anthropic/claude-sonnet-5", "weight": 1 }
+      ]
+    },
+    "premium": {
+      "rank": 40,
+      "thinking": "xhigh",
+      "selection": "weighted-random",
+      "candidates": [
+        { "model": "openai-codex/gpt-5.6-sol", "weight": 3 },
+        { "model": "anthropic/claude-fable-5", "weight": 1 },
+        { "model": "anthropic/claude-opus-4-8", "weight": 1 }
+      ]
+    }
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "enabled": true,
+  "routeImplicitSkillReads": true,
+  "usageLedger": {
+    "enabled": false,
+    "retentionDays": 30,
+    "maxBytes": 10485760
+  },
+  "modelPolicies": {
+    "provider/cheap-model-id": { "metered": false },
+    "provider/workflow-model-id": { "metered": false },
+    "provider/premium-model-id": { "metered": true, "consent": "allow" }
+  },
+  "tiers": {
+    "economy": {
+      "rank": 10,
+      "thinking": "medium",
+      "candidates": [{ "model": "provider/cheap-model-id" }]
+    },
+    "standard": {
+      "rank": 20,
+      "thinking": "medium",
+      "candidates": [{ "model": "provider/workflow-model-id" }]
+    },
+    "premium": {
+      "rank": 40,
+      "thinking": "xhigh",
+      "candidates": [{ "model": "provider/premium-model-id" }]
+    }
+  }
+}

@@ -1,0 +1,4 @@
+node_modules/
+.pi-subagents/
+model-tier-router.json
+.pi/model-tier-router.json

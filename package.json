@@ -1,0 +1,52 @@
+{
+  "name": "@flurdy/pi-model-tier-router",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Provider-neutral semantic model-tier routing for Pi",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/flurdy/pi-model-tier-router.git"
+  },
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "model-routing"
+  ],
+  "engines": {
+    "node": ">=22.19"
+  },
+  "files": [
+    "config.ts",
+    "index.ts",
+    "routing.ts",
+    "usage-ledger.ts",
+    "usage.ts",
+    "README.md",
+    "model-tier-router.example.json",
+    "model-tier-router.opinionated.example.json"
+  ],
+  "scripts": {
+    "test": "node --experimental-strip-types --test *.test.ts",
+    "typecheck": "tsc --noEmit",
+    "check": "npm test && npm run typecheck && npm run pack:check",
+    "pack:check": "node scripts/check-package.mjs",
+    "verify:git-install": "scripts/verify-git-install.sh"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "0.82.1",
+    "@earendil-works/pi-coding-agent": "0.82.1",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
+  }
+}
