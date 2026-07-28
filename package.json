@@ -1,18 +1,19 @@
 {
-  "name": "@flurdy/pi-model-tier-router",
+  "name": "@flurdy/pi-skill-model-router",
   "version": "0.1.0",
   "private": true,
-  "description": "Provider-neutral semantic model-tier routing for Pi",
+  "description": "Provider-neutral skill-triggered semantic model routing for Pi",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/flurdy/pi-model-tier-router.git"
+    "url": "git+https://github.com/flurdy/pi-skill-model-router.git"
   },
   "type": "module",
   "keywords": [
     "pi-package",
     "pi-extension",
-    "model-routing"
+    "model-routing",
+    "skill-routing"
   ],
   "engines": {
     "node": ">=22.19"

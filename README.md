@@ -1,4 +1,4 @@
-# Pi Model Tier Router
+# Pi Skill Model Router
 
 A provider-neutral [Pi](https://pi.dev) extension that maps portable skill metadata such as `model-tier: standard` to exact models configured on your machine. It also applies skill `effort` as Pi's thinking level and restores the previous model and thinking level when the run finishes.
 
@@ -31,7 +31,7 @@ The router controls selection and consent; these tools display or audit what hap
 Pin an immutable commit or tag:
 
 ```bash
-pi install git:github.com/flurdy/pi-model-tier-router@<commit-or-tag>
+pi install git:github.com/flurdy/pi-skill-model-router@<commit-or-tag>
 ```
 
 The package installs the extension only. It does not create or change your routing policy.
@@ -55,7 +55,7 @@ pi --list-models
 Copy an example, then replace every placeholder with an exact `provider/model-id` from that output:
 
 ```bash
-cp ~/.pi/agent/git/github.com/flurdy/pi-model-tier-router/model-tier-router.example.json \
+cp ~/.pi/agent/git/github.com/flurdy/pi-skill-model-router/model-tier-router.example.json \
   ~/.pi/agent/model-tier-router.json
 $EDITOR ~/.pi/agent/model-tier-router.json
 ```

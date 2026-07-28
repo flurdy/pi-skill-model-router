@@ -9,8 +9,16 @@ fi
 
 git -C "$repository_root" ls-files --error-unmatch package.json >/dev/null
 commit=$(git -C "$repository_root" rev-parse HEAD)
-base_path=$(dirname "$(dirname "$repository_root")")
-repository_path=$(realpath --relative-to="$base_path" "$repository_root")
+repository_path=$(node - "$repository_root/package.json" <<'NODE'
+const { readFileSync } = require("node:fs");
+const packageJson = JSON.parse(readFileSync(process.argv[2], "utf8"));
+const repositoryUrl = typeof packageJson.repository === "string" ? packageJson.repository : packageJson.repository?.url;
+if (!repositoryUrl) throw new Error("package.json repository URL is required");
+const path = new URL(repositoryUrl.replace(/^git\+/, "")).pathname.replace(/^\//, "").replace(/\.git$/, "");
+if (!/^[^/]+\/[^/]+$/.test(path)) throw new Error(`unsupported repository URL: ${repositoryUrl}`);
+console.log(path);
+NODE
+)
 temporary_root=$(mktemp -d)
 server_pid=""
 cleanup() {
