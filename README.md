@@ -4,6 +4,11 @@ Small, provider-neutral Pi extension that maps semantic skill metadata such as `
 
 Exact provider/model IDs stay in local JSON configuration; the extension contains no provider defaults.
 
+## Related repositories
+
+- [flurdy/ai-tools](https://github.com/flurdy/ai-tools) contains complementary Pi and Claude Code tooling, plus this router's pre-extraction history.
+- [flurdy/agent-skills](https://github.com/flurdy/agent-skills) contains shared cross-client skills whose portable `model-tier` and `effort` metadata this extension can enforce in Pi.
+
 ## Requirements
 
 - Pi 0.80.6 or newer
