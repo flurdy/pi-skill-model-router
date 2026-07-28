@@ -9,6 +9,18 @@ Exact provider/model IDs and spend policy stay in local JSON configuration. The 
 - [flurdy/ai-tools](https://github.com/flurdy/ai-tools) — complementary Pi and Claude Code tooling, plus this router's pre-extraction history.
 - [flurdy/agent-skills](https://github.com/flurdy/agent-skills) — shared cross-client skills whose `model-tier` and `effort` metadata this extension can enforce in Pi.
 
+### Companion tools
+
+These tools complement the router but do different jobs:
+
+| Tool | Role |
+|---|---|
+| [Pi statusline](https://github.com/flurdy/ai-tools/tree/main/pi/statusline) | Displays the active model, thinking level, tokens, cache stats, and Pi-configured estimated cost in Pi's footer. |
+| [`token-dashboard`](https://github.com/flurdy/agent-skills/tree/main/skills/token-dashboard) | Read-only current-session and UTC-week token telemetry across Pi, Claude Code, and Codex, with optional OpenRouter analytics. |
+| [`model-update-check`](https://github.com/flurdy/agent-skills/tree/main/skills/model-update-check) | Checks configured model IDs against Pi's active catalog and public metadata, then flags models worth reviewing. |
+
+The router controls selection and consent; these tools display or audit what happened. Their token and cost figures are telemetry or local estimates, not provider billing or subscription quota.
+
 ## Requirements
 
 - Pi 0.80.6 or newer
