@@ -2,3 +2,9 @@ node_modules/
 .pi-subagents/
 model-tier-router.json
 .pi/model-tier-router.json
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+.beads/proxieddb/
