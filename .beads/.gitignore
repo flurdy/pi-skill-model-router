@@ -13,6 +13,9 @@ last-touched
 # Daemon runtime (lock, log, pid)
 daemon.*
 
+# Interactions log (runtime, not versioned)
+interactions.jsonl
+
 # Push state (runtime, per-machine)
 push-state.json
 
