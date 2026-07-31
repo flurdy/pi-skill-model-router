@@ -36,13 +36,21 @@ pi install git:github.com/flurdy/pi-skill-model-router@<commit-or-tag>
 
 The package installs the extension only. It does not create or change your routing policy.
 
-For local development from a checkout:
+For a one-off local development run from a checkout:
 
 ```bash
 pi -e ./index.ts
 ```
 
-Restart Pi or run `/reload` after changing the installed package or configuration.
+To dogfood the mutable checkout globally:
+
+```bash
+make apply
+```
+
+This links the checkout into `~/.pi/agent/extensions/model-tier-router`. The immutable Git package
+install remains the reproducible deployment path. Restart Pi or run `/reload` after applying or
+changing the extension or configuration.
 
 ## Configure
 
