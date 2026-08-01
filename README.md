@@ -6,6 +6,9 @@ Exact provider/model IDs and spend policy stay in local JSON configuration. The 
 
 ## Related repositories
 
+These independently usable repositories are installed and versioned separately, but complement
+the router's model-selection role:
+
 - [flurdy/ai-tools](https://github.com/flurdy/ai-tools) — complementary Pi and Claude Code tooling, plus this router's pre-extraction history.
 - [flurdy/agent-skills](https://github.com/flurdy/agent-skills) — shared cross-client skills whose `model-tier` and `effort` metadata this extension can enforce in Pi.
 
