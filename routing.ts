@@ -11,6 +11,7 @@ export interface ModelCandidate {
 	/** Legacy or project-local classification. Prefer global modelPolicies for exact-model policy. */
 	metered?: boolean;
 	weight?: number;
+	enabled?: boolean;
 }
 
 export type SelectionPolicy = "first-available" | "weighted-random";
@@ -186,7 +187,7 @@ export function selectRouteCandidate(
 	const policy = route.selection ?? "first-available";
 	if (route.routingDisabled) return { candidate: undefined, policy, pool: [] };
 	const availableIds = new Set(available.map((model) => `${model.provider}/${model.id}`));
-	const availableCandidates = route.candidates.filter((candidate) => availableIds.has(candidate.model));
+	const availableCandidates = route.candidates.filter((candidate) => candidate.enabled !== false && availableIds.has(candidate.model));
 	if (policy === "first-available") {
 		return {
 			candidate: availableCandidates[0],

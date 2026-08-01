@@ -85,10 +85,19 @@ From a source checkout, copy `./model-tier-router.example.json` instead.
 | `tiers.<name>.thinking` | Default thinking level when the skill omits `effort`. |
 | `tiers.<name>.selection` | `first-available` (default) or `weighted-random`. |
 | `tiers.<name>.candidates` | Exact models and, for weighted selection, integer weights from 1 to 100. |
+| `tiers.<name>.candidates[].enabled` | Set to `false` to temporarily exclude a candidate without removing its configuration. |
 | `modelPolicies.<provider/model>` | Global exact-model `metered` classification and optional `consent`. |
 | `usageLedger` | Optional bounded local response-counter telemetry. Disabled by default. |
 
-Invalid selection policies or malformed weighted candidates disable that tier rather than silently changing selection or paid share.
+Invalid selection policies or malformed weighted candidates disable that tier rather than silently changing selection or paid share. Disabled weighted candidates must retain a valid weight so re-enabling them does not silently change the configured distribution:
+
+```json
+{
+  "model": "anthropic/claude-sonnet-5",
+  "weight": 1,
+  "enabled": false
+}
+```
 
 Shared skills should use these portable tiers:
 
@@ -137,8 +146,8 @@ See the [direct-turn routing assessment](docs/pi-direct-turn-model-routing-asses
 
 Selection is bounded to configured, currently available candidates and happens before the provider request:
 
-- `first-available` selects the first configured candidate that is currently available. If that candidate cannot route, the router stops instead of trying the next one.
-- `weighted-random` filters unavailable or route-ineligible candidates, then makes one independent draw using candidate weights. Weights represent expected run share, not tokens, cost, quota, latency, or quality.
+- `first-available` selects the first enabled configured candidate that is currently available. If that candidate cannot route, the router stops instead of trying the next one.
+- `weighted-random` filters disabled, unavailable, or route-ineligible candidates, then makes one independent draw using candidate weights. Weights represent expected run share, not tokens, cost, quota, latency, or quality.
 - A declined prompt or failed model switch keeps the current model. The router does not redraw or try another candidate.
 
 The router never performs post-launch provider fallback. Any future fallback must remain bounded to named candidates, resolve identity and cost classification before launch, obtain consent for the complete fallback set when needed, and stop on exhaustion.

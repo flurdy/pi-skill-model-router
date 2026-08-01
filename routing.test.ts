@@ -222,6 +222,32 @@ describe("candidate selection", () => {
 		assert.equal(availableFallback.candidate?.model, "provider/b");
 		assert.deepEqual(availableFallback.pool, [{ model: "provider/b", weight: 1 }]);
 	});
+
+	it("excludes disabled weighted candidates from selection", () => {
+		const mixed: TierRoute = {
+			rank: 20,
+			thinking: "high",
+			selection: "weighted-random",
+			candidates: [
+				{ model: "provider/disabled", metered: false, weight: 100, enabled: false },
+				{ model: "provider/enabled", metered: false, weight: 1 },
+			],
+		};
+		const available = [model("provider", "disabled"), model("provider", "enabled")];
+		const selected = selectRouteCandidate(mixed, available, () => true, () => 0);
+		assert.equal(selected.candidate?.model, "provider/enabled");
+		assert.deepEqual(selected.pool, [{ model: "provider/enabled", weight: 1 }]);
+
+		const allDisabled: TierRoute = {
+			...mixed,
+			candidates: mixed.candidates.map((candidate) => ({ ...candidate, enabled: false })),
+		};
+		assert.deepEqual(selectRouteCandidate(allDisabled, available), {
+			candidate: undefined,
+			policy: "weighted-random",
+			pool: [],
+		});
+	});
 });
 
 describe("configuration", () => {
@@ -505,6 +531,32 @@ describe("configuration", () => {
 		assert.equal(selectRouteCandidate(result.config.tiers.malformed, [model("provider", "paid")]).candidate, undefined);
 		assert.match(result.warnings.join("\n"), /weight must be an integer from 1 to 100; tier routing disabled/);
 		assert.match(result.warnings.join("\n"), /weight is ignored by first-available selection/);
+	});
+
+	it("loads an explicit disabled candidate without disabling its weighted tier", () => {
+		const root = mkdtempSync(join(tmpdir(), "model-tier-router-"));
+		const agentDir = join(root, "agent");
+		const cwd = join(root, "project");
+		mkdirSync(agentDir, { recursive: true });
+		writeFileSync(join(agentDir, "model-tier-router.json"), JSON.stringify({ tiers: {
+			standard: {
+				rank: 20,
+				thinking: "high",
+				selection: "weighted-random",
+				candidates: [
+					{ model: "provider/disabled", weight: 100, enabled: false },
+					{ model: "provider/enabled", weight: 1 },
+				],
+			},
+		} }));
+
+		const result = loadRouterConfig({ agentDir, cwd, projectTrusted: false });
+		assert.deepEqual(result.warnings, []);
+		assert.equal(result.config.tiers.standard.routingDisabled, undefined);
+		assert.deepEqual(result.config.tiers.standard.candidates, [
+			{ model: "provider/disabled", weight: 100, enabled: false },
+			{ model: "provider/enabled", weight: 1 },
+		]);
 	});
 
 	it("fails closed on an invalid explicit selection policy instead of defaulting to first-available", () => {

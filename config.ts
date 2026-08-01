@@ -125,12 +125,22 @@ function parseTier(name: string, value: unknown, path: string, warnings: string[
 			if (selection === "weighted-random") invalidWeightedCandidate = true;
 			continue;
 		}
+		if (item.enabled !== undefined && typeof item.enabled !== "boolean") {
+			warnings.push(`${path}: tier ${name} candidate ${index + 1} enabled must be boolean when provided`);
+			if (selection === "weighted-random") invalidWeightedCandidate = true;
+			continue;
+		}
 		if (item.metered !== undefined && typeof item.metered !== "boolean") {
 			warnings.push(`${path}: tier ${name} candidate ${index + 1} metered must be boolean when provided`);
 			if (selection === "weighted-random") invalidWeightedCandidate = true;
 			continue;
 		}
-		candidates.push({ model: item.model, ...(item.metered === undefined ? {} : { metered: item.metered }), ...(weight === undefined ? {} : { weight }) });
+		candidates.push({
+			model: item.model,
+			...(item.metered === undefined ? {} : { metered: item.metered }),
+			...(weight === undefined ? {} : { weight }),
+			...(item.enabled === undefined ? {} : { enabled: item.enabled }),
+		});
 	}
 	return {
 		rank: input.rank,
