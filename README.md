@@ -49,8 +49,8 @@ make apply
 ```
 
 This links the checkout into `~/.pi/agent/extensions/model-tier-router`. The immutable Git package
-install remains the reproducible deployment path. Restart Pi or run `/reload` after applying or
-changing the extension or configuration.
+install remains the reproducible deployment path. Restart Pi after first linking the extension;
+`/reload` is sufficient for later source or configuration changes once Pi has loaded it.
 
 ## Configure
 

@@ -14,6 +14,7 @@ apply:
 	mkdir -p "$(PI_EXTENSIONS_DIR)"
 	ln -sfn "$(CURDIR)" "$(PI_EXTENSIONS_DIR)/model-tier-router"
 	$(MAKE) verify-apply
+	@echo "Restart Pi to discover the newly linked extension."
 
 verify-apply:
 	test "$$(readlink "$(PI_EXTENSIONS_DIR)/model-tier-router")" = "$(CURDIR)"
