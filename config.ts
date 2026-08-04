@@ -101,6 +101,7 @@ function parseTier(name: string, value: unknown, path: string, warnings: string[
 	}
 
 	const candidates: TierRoute["candidates"] = [];
+	const candidateIndexes = new Map<string, number>();
 	let invalidWeightedCandidate = false;
 	for (const [index, candidate] of input.candidates.entries()) {
 		if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
@@ -134,6 +135,12 @@ function parseTier(name: string, value: unknown, path: string, warnings: string[
 			warnings.push(`${path}: tier ${name} candidate ${index + 1} metered must be boolean when provided`);
 			if (selection === "weighted-random") invalidWeightedCandidate = true;
 			continue;
+		}
+		const firstIndex = candidateIndexes.get(item.model);
+		if (firstIndex !== undefined) {
+			warnings.push(`${path}: tier ${name} candidate ${index + 1} duplicates ${item.model} from candidate ${firstIndex}; duplicate entries are retained`);
+		} else {
+			candidateIndexes.set(item.model, index + 1);
 		}
 		candidates.push({
 			model: item.model,

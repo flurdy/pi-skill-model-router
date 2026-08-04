@@ -21,10 +21,18 @@ export interface SelectionPoolEntry {
 	weight: number;
 }
 
+export type CandidateExclusionReason = "disabled" | "not-available";
+
+export interface CandidateExclusion {
+	model: string;
+	reason: CandidateExclusionReason;
+}
+
 export interface CandidateSelection {
 	candidate: ModelCandidate | undefined;
 	policy: SelectionPolicy;
 	pool: SelectionPoolEntry[];
+	exclusions: CandidateExclusion[];
 }
 
 export type ConfiguredConsentPolicy = "ask" | "allow";
@@ -82,6 +90,7 @@ export interface RouteDecisionRecord {
 	consentBasis: ConsentBasis;
 	selectionPolicy: SelectionPolicy;
 	selectionPool: SelectionPoolEntry[];
+	candidateExclusions: CandidateExclusion[];
 	reason: string;
 	warnings: string[];
 	restoration: RestorationResult;
@@ -98,6 +107,7 @@ export interface RouteDecisionInput {
 	consentBasis: ConsentBasis;
 	selectionPolicy?: SelectionPolicy;
 	selectionPool?: SelectionPoolEntry[];
+	candidateExclusions?: CandidateExclusion[];
 	reason: string;
 	warnings?: string[];
 	restoration?: RestorationResult;
@@ -115,6 +125,7 @@ export function createRouteDecision(input: RouteDecisionInput): RouteDecisionRec
 		consentBasis: input.consentBasis,
 		selectionPolicy: input.selectionPolicy ?? "first-available",
 		selectionPool: (input.selectionPool ?? []).map((entry) => ({ ...entry })),
+		candidateExclusions: (input.candidateExclusions ?? []).map((entry) => ({ ...entry })),
 		reason: input.reason,
 		warnings: [...(input.warnings ?? [])],
 		restoration: input.restoration ?? "not-applicable",
@@ -185,27 +196,39 @@ export function selectRouteCandidate(
 	random: () => number = Math.random,
 ): CandidateSelection {
 	const policy = route.selection ?? "first-available";
-	if (route.routingDisabled) return { candidate: undefined, policy, pool: [] };
+	if (route.routingDisabled) return { candidate: undefined, policy, pool: [], exclusions: [] };
 	const availableIds = new Set(available.map((model) => `${model.provider}/${model.id}`));
-	const availableCandidates = route.candidates.filter((candidate) => candidate.enabled !== false && availableIds.has(candidate.model));
+	const exclusions: CandidateExclusion[] = [];
+	const availableCandidates = route.candidates.filter((candidate) => {
+		if (candidate.enabled === false) {
+			exclusions.push({ model: candidate.model, reason: "disabled" });
+			return false;
+		}
+		if (!availableIds.has(candidate.model)) {
+			exclusions.push({ model: candidate.model, reason: "not-available" });
+			return false;
+		}
+		return true;
+	});
 	if (policy === "first-available") {
 		return {
 			candidate: availableCandidates[0],
 			policy,
 			pool: availableCandidates.map((candidate) => ({ model: candidate.model, weight: 1 })),
+			exclusions,
 		};
 	}
 
 	const eligible = availableCandidates.filter(isEligible);
 	const pool = eligible.map((candidate) => ({ model: candidate.model, weight: candidate.weight ?? 1 }));
 	const totalWeight = pool.reduce((total, entry) => total + entry.weight, 0);
-	if (totalWeight === 0) return { candidate: undefined, policy, pool };
+	if (totalWeight === 0) return { candidate: undefined, policy, pool, exclusions };
 	let draw = Math.min(Math.max(random(), 0), 1 - Number.EPSILON) * totalWeight;
 	for (const candidate of eligible) {
 		draw -= candidate.weight ?? 1;
-		if (draw < 0) return { candidate, policy, pool };
+		if (draw < 0) return { candidate, policy, pool, exclusions };
 	}
-	return { candidate: eligible.at(-1), policy, pool };
+	return { candidate: eligible.at(-1), policy, pool, exclusions };
 }
 
 export function findExactModel(candidate: ModelCandidate, available: Model<Api>[]): Model<Api> | undefined {

@@ -18,6 +18,7 @@ import {
 	requiresConsentConfirmation,
 	resolveCandidatePolicy,
 	selectRouteCandidate,
+	type CandidateExclusion,
 	type ConsentBasis,
 	type EffectiveConsentPolicy,
 	type MeteredClassification,
@@ -43,6 +44,7 @@ interface RunState {
 	activeConsentPolicy: EffectiveConsentPolicy;
 	activeSelectionPolicy: SelectionPolicy;
 	activeSelectionPool: SelectionPoolEntry[];
+	activeCandidateExclusions: CandidateExclusion[];
 	requestedThinking: ThinkingLevel;
 	activeThinking: ThinkingLevel;
 	routedSkills: string[];
@@ -157,7 +159,7 @@ export default function modelTierRouter(pi: ExtensionAPI, options: ModelTierRout
 		restoration: RouteDecisionRecord["restoration"] = "not-applicable",
 		effectiveTier = requestedTier,
 		policy?: { meteredClassification: MeteredClassification; consentPolicy: EffectiveConsentPolicy },
-		selection?: { policy: SelectionPolicy; pool: SelectionPoolEntry[] },
+		selection?: { policy: SelectionPolicy; pool: SelectionPoolEntry[]; exclusions: CandidateExclusion[] },
 	): RouteDecisionRecord {
 		const record = createRouteDecision({
 			requestedTier,
@@ -170,6 +172,7 @@ export default function modelTierRouter(pi: ExtensionAPI, options: ModelTierRout
 			consentBasis,
 			selectionPolicy: selection?.policy,
 			selectionPool: selection?.pool,
+			candidateExclusions: selection?.exclusions,
 			reason,
 			warnings,
 			restoration,
@@ -324,7 +327,7 @@ export default function modelTierRouter(pi: ExtensionAPI, options: ModelTierRout
 					meteredClassification: run.activeMeteredClassification,
 					consentPolicy: run.activeConsentPolicy,
 				},
-				{ policy: run.activeSelectionPolicy, pool: run.activeSelectionPool },
+				{ policy: run.activeSelectionPolicy, pool: run.activeSelectionPool, exclusions: run.activeCandidateExclusions },
 			);
 			activateDecision(run, routeDecision, skillName);
 			if (decision === "retain-lower") {
@@ -433,7 +436,7 @@ export default function modelTierRouter(pi: ExtensionAPI, options: ModelTierRout
 			return;
 		}
 
-		const activeDecision = recordRouteDecision(ctx, metadata.tier, candidate, consentBasis, "routed", [], "pending", metadata.tier, candidatePolicy, selection);
+		const activeDecision = recordRouteDecision(ctx, metadata.tier, candidate, consentBasis, decision, [], "pending", metadata.tier, candidatePolicy, selection);
 		if (!run) {
 			run = {
 				originalModel,
@@ -445,6 +448,7 @@ export default function modelTierRouter(pi: ExtensionAPI, options: ModelTierRout
 				activeConsentPolicy: candidatePolicy.consentPolicy,
 				activeSelectionPolicy: selection.policy,
 				activeSelectionPool: selection.pool,
+				activeCandidateExclusions: selection.exclusions,
 				requestedThinking,
 				activeThinking: pi.getThinkingLevel(),
 				routedSkills: [skillName],
@@ -464,6 +468,7 @@ export default function modelTierRouter(pi: ExtensionAPI, options: ModelTierRout
 			run.activeConsentPolicy = candidatePolicy.consentPolicy;
 			run.activeSelectionPolicy = selection.policy;
 			run.activeSelectionPool = selection.pool;
+			run.activeCandidateExclusions = selection.exclusions;
 			run.requestedThinking = selectedThinking;
 			run.activeThinking = pi.getThinkingLevel();
 			activateDecision(run, activeDecision, skillName);
