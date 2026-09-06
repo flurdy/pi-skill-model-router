@@ -84,7 +84,7 @@ From a source checkout, copy `./model-tier-router.example.json` instead.
 |---|---|
 | `enabled` | Enables routing when the extension loads. |
 | `routeImplicitSkillReads` | Allows loaded skill files read by the model to request a route. |
-| `tiers.<name>.rank` | Controls nested upgrades. A run can move only to a higher rank. |
+| `tiers.<name>.rank` | Orders nested upgrades and first-implicit-route baseline comparisons. |
 | `tiers.<name>.thinking` | Default thinking level when the skill omits `effort`. |
 | `tiers.<name>.selection` | `first-available` (default) or `weighted-random`. |
 | `tiers.<name>.candidates` | Exact models and, for weighted selection, integer weights from 1 to 100. |
@@ -133,7 +133,11 @@ effort: xhigh
 
 Supported effort values are `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`.
 
-The first routed skill snapshots the current model and thinking level. Nested skills may upgrade to a higher-ranked tier or raise thinking, but never downgrade either. Pi restores the original route when the run settles.
+The first successful route snapshots the current model and thinking level. Nested skills may select only higher-ranked tiers or raise requested thinking. Pi can clamp effective thinking to model capabilities; the router retains the higher request for later upgrades. The original model and thinking are restored when the run settles.
+
+For a **first implicit skill read**, the current exact `provider/model` must appear in enabled candidates of valid configured tiers at one distinct rank. A lower baseline rank permits routing through the usual spend gates without lowering requested thinking. An equal/higher rank, conflicting ranks, or no match retains **both model and thinking**, without drawing a candidate, creating a routed run, or owing restoration. Multiple memberships at the same rank are valid. Disabled candidates and disabled tiers provide no baseline evidence. Retention is reported in `/model-tier status` with effective tier `(baseline)`; a later higher-tier read can still qualify.
+
+These are configured-rank guarantees, not model-quality judgments. Unlisted models cannot automatically route through an implicit read; use an explicit `/skill:name` instead. A **first explicit skill command** keeps its existing authority to select the requested tier and thinking, including a lower tier, subject to consent. Once a routed run exists, nested no-downshift rules apply to either invocation source.
 
 Routing boundaries:
 
@@ -141,7 +145,9 @@ Routing boundaries:
 - Model-initiated skill reads route only when `routeImplicitSkillReads` is enabled and the read path exactly matches a skill loaded for that turn.
 - Plain prompts do not select a tier.
 - Skills queued while another run is streaming keep the active route because Pi has no safe message-scoped routing boundary for them.
-- A manual model selection stops further routing and cancels automatic restoration for that run.
+- An idle manual selection establishes the next baseline. An observed model selection during a turn stops further routing and cancels automatic restoration, even before the first routed skill. Pending consent/switch operations recheck state before applying thinking or claiming a route.
+- Pi exposes no startup-choice or selection-initiator provenance and emits no event for same-model selections. Other extensions' non-restore selections are conservatively treated as manual; only the router's expected target event is ignored. This is not an atomic model-selection lock.
+- On Pi 0.85.0, extension model/thinking setters change session history but not global defaults. Older supported Pi versions may persist defaults; see the assessment below.
 
 See the [direct-turn routing assessment](docs/pi-direct-turn-model-routing-assessment.md) for the boundary analysis.
 

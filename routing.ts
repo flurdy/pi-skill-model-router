@@ -171,6 +171,18 @@ export function maxThinkingLevel(left: ThinkingLevel, right: ThinkingLevel): Thi
 	return THINKING_LEVELS.indexOf(left) >= THINKING_LEVELS.indexOf(right) ? left : right;
 }
 
+/** Configured membership is local rank policy, not inferred model capability. */
+export function baselineRank(
+	model: ModelIdentity | undefined,
+	tiers: Record<string, TierRoute>,
+): { rank: number | undefined; tiers: string[] } {
+	const identity = model && `${model.provider}/${model.model}`;
+	const matches = Object.entries(tiers).filter(([, route]) => !route.routingDisabled
+		&& route.candidates.some((candidate) => candidate.enabled !== false && candidate.model === identity));
+	const ranks = new Set(matches.map(([, route]) => route.rank));
+	return { rank: ranks.size === 1 ? [...ranks][0] : undefined, tiers: matches.map(([tier]) => tier) };
+}
+
 export function decideTier(active: ActiveTier | undefined, requested: ActiveTier): TierDecision {
 	if (!active) return "initial";
 	if (requested.rank > active.rank) return "upgrade";

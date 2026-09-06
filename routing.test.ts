@@ -732,6 +732,10 @@ interface HarnessSkill {
 }
 
 interface RouterHarnessOptions {
+	initialModel?: Model<Api>;
+	initialThinking?: string;
+	onConfirm?: () => Promise<void>;
+	onSetModel?: (target: Model<Api>) => Promise<void>;
 	clampThinking?: (requested: string, modelId: string) => string;
 	confirm?: boolean;
 	hasUI?: boolean;
@@ -778,7 +782,9 @@ async function createRouterHarness(
 
 	const commands: Array<Record<string, any>> = [];
 	const skillsByName = new Map<string, Skill>();
-	const globalTiers: Record<string, unknown> = {};
+	const globalTiers: Record<string, unknown> = {
+		baseline: { rank: 0, thinking: "low", candidates: [{ model: "provider/original", metered: false }] },
+	};
 	const projectTiers: Record<string, unknown> = {};
 	for (const [name, skill] of Object.entries(skills)) {
 		const path = join(skillDir, `${name}.md`);
@@ -836,8 +842,8 @@ async function createRouterHarness(
 	}
 
 	const original = model("provider", "original");
-	let currentModel = original;
-	let thinking = "low";
+	let currentModel = options.initialModel ?? original;
+	let thinking = options.initialThinking ?? "low";
 	const available = [
 		original,
 		model("provider", "manual"),
@@ -869,6 +875,9 @@ async function createRouterHarness(
 		get model() {
 			return currentModel;
 		},
+		get thinkingLevel() {
+			return thinking;
+		},
 		modelRegistry: { getAvailable: () => available },
 		isIdle: () => idle,
 		isProjectTrusted: () => true,
@@ -876,6 +885,7 @@ async function createRouterHarness(
 		ui: {
 			confirm: async (title: string, message: string) => {
 				confirmations.push({ title, message });
+				await options.onConfirm?.();
 				return options.confirm ?? true;
 			},
 			notify: (message: string) => notifications.push(message),
@@ -911,6 +921,7 @@ async function createRouterHarness(
 			currentModel = next;
 			modelSelections.push(id);
 			await emit("model_select", { model: next, previousModel, source: "set" });
+			await options.onSetModel?.(next);
 			return true;
 		},
 	} as unknown as ExtensionAPI;
@@ -1004,6 +1015,248 @@ function lastRouteDecision(harness: RouterHarness): RouteDecisionRecord {
 	assert.ok(line, "expected a normalized route-decision record in status output");
 	return JSON.parse(line.slice("last route decision: ".length)) as RouteDecisionRecord;
 }
+
+describe("first implicit route", () => {
+	const skills = {
+		build: { tier: "standard", rank: 20, effort: "high" },
+		audit: { tier: "premium", rank: 40, effort: "xhigh" },
+	};
+
+	it("retains a premium baseline for a first implicit standard skill without owning restoration", async () => {
+		const harness = await createRouterHarness(skills, { initialThinking: "xhigh" });
+		await harness.selectManually(model("provider", "premium"));
+		await harness.loadSkillsForTurn("build");
+		await harness.readSkill("build");
+
+		assert.equal(harness.ctx.model.id, "premium");
+		assert.equal(harness.ctx.thinkingLevel, "xhigh");
+		assert.deepEqual(harness.modelSelectionAttempts, []);
+		assert.deepEqual(harness.thinkingSelections, []);
+		assert.deepEqual(harness.confirmations, []);
+		await harness.invokeCommand("model-tier", "status");
+		assert.equal(lastRouteDecision(harness).reason, "baseline-retain-lower");
+		assert.equal(lastRouteDecision(harness).effectiveTier, "(baseline)");
+		assert.equal(lastRouteDecision(harness).restoration, "not-applicable");
+		assert.match(harness.notifications.at(-1)!, /active tier: \(none\)/);
+
+		await harness.emit("message_end", { message: assistantMessage("provider", "premium") });
+		await harness.emit("agent_settled");
+		assert.deepEqual(harness.usageRecords, []);
+		assert.deepEqual(harness.modelSelectionAttempts, []);
+	});
+
+	it("retains an equal-rank baseline without drawing or raising thinking", async () => {
+		let draws = 0;
+		const harness = await createRouterHarness({
+			build: { tier: "standard", rank: 20, effort: "xhigh", selection: "weighted-random", candidates: [
+				{ model: "provider/standard", metered: false, weight: 1 },
+				{ model: "provider/peer", metered: false, weight: 1 },
+			] },
+		}, { initialModel: model("provider", "peer"), random: () => { draws++; return 0; } });
+		await harness.loadSkillsForTurn("build");
+		await harness.readSkill("build");
+
+		assert.equal(harness.ctx.model.id, "peer");
+		assert.equal(harness.ctx.thinkingLevel, "low");
+		assert.equal(draws, 0);
+		assert.deepEqual(harness.modelSelectionAttempts, []);
+		await harness.invokeCommand("model-tier", "status");
+		assert.equal(lastRouteDecision(harness).reason, "baseline-retain-equal");
+	});
+
+	it("retains an unconfigured baseline without inferring rank from its name", async () => {
+		const harness = await createRouterHarness(skills, {
+			initialModel: model("unconfigured", "economy"), initialThinking: "max",
+		});
+		await harness.loadSkillsForTurn("build", "audit");
+		await harness.readSkill("build");
+		await harness.readSkill("audit");
+
+		assert.deepEqual(harness.modelSelectionAttempts, []);
+		assert.deepEqual(harness.thinkingSelections, []);
+		await harness.invokeCommand("model-tier", "status");
+		assert.equal(lastRouteDecision(harness).reason, "baseline-unknown");
+		assert.match(lastRouteDecision(harness).warnings.join("\n"), /explicit \/skill:/);
+	});
+
+	it("retains a baseline configured at conflicting ranks", async () => {
+		const harness = await createRouterHarness({
+			...skills,
+			other: { tier: "other", rank: 10, candidates: [{ model: "provider/premium", metered: false }] },
+		}, { initialModel: model("provider", "premium") });
+		await harness.loadSkillsForTurn("audit");
+		await harness.readSkill("audit");
+
+		assert.deepEqual(harness.modelSelectionAttempts, []);
+		await harness.invokeCommand("model-tier", "status");
+		assert.equal(lastRouteDecision(harness).reason, "baseline-ambiguous");
+	});
+
+	it("accepts multiple baseline memberships when all have the same rank", async () => {
+		const harness = await createRouterHarness({
+			...skills,
+			other: { tier: "other", rank: 20, candidates: [{ model: "provider/standard", metered: false }] },
+		}, { initialModel: model("provider", "standard"), initialThinking: "max" });
+		await harness.loadSkillsForTurn("audit");
+		await harness.readSkill("audit");
+
+		assert.deepEqual(harness.modelSelections, ["provider/premium"]);
+		assert.equal(harness.ctx.thinkingLevel, "max");
+	});
+
+	for (const disabled of ["candidate", "tier"] as const) {
+		it(`does not use a disabled ${disabled} to classify the baseline`, async () => {
+			const harness = await createRouterHarness({
+				...skills,
+				other: { tier: "other", rank: 10, candidates: [{ model: "provider/excluded", metered: false }] },
+			}, { initialModel: model("provider", "excluded") });
+			harness.setTierRoute("other", {
+				rank: 10, thinking: "high", selection: disabled === "tier" ? "invalid" : "first-available",
+				candidates: [{ model: "provider/excluded", metered: false, enabled: disabled !== "candidate" }],
+			});
+			await harness.invokeCommand("model-tier", "reload");
+			await harness.loadSkillsForTurn("build");
+			await harness.readSkill("build");
+
+			assert.deepEqual(harness.modelSelectionAttempts, []);
+			await harness.invokeCommand("model-tier", "status");
+			assert.equal(lastRouteDecision(harness).reason, "baseline-unknown");
+		});
+	}
+
+	it("allows a later upgrade after retaining a baseline and restores its original thinking", async () => {
+		const harness = await createRouterHarness(skills, {
+			initialModel: model("provider", "standard"), initialThinking: "max",
+		});
+		await harness.loadSkillsForTurn("build", "audit");
+		await harness.readSkill("build");
+		await harness.readSkill("audit");
+		assert.deepEqual(harness.modelSelectionAttempts, ["provider/premium"]);
+		assert.equal(harness.ctx.thinkingLevel, "max");
+
+		await harness.emit("agent_settled");
+		assert.equal(harness.ctx.model.id, "standard");
+		assert.equal(harness.ctx.thinkingLevel, "max");
+		assert.deepEqual(harness.modelSelectionAttempts, ["provider/premium", "provider/standard"]);
+	});
+
+	it("preserves baseline thinking requests through clamping and a later upgrade", async () => {
+		const harness = await createRouterHarness(skills, {
+			initialThinking: "max",
+			clampThinking: (level, id) => id === "standard" && level === "max" ? "high" : level,
+		});
+		await harness.loadSkillsForTurn("build", "audit");
+		await harness.readSkill("build");
+		await harness.readSkill("audit");
+		assert.deepEqual(harness.thinkingSelections, ["high", "max"]);
+	});
+
+	it("leaves baseline thinking untouched when an upgrade is unavailable or cannot switch", async () => {
+		for (const unavailable of [true, false]) {
+			const harness = await createRouterHarness({
+				build: { ...skills.build, available: !unavailable },
+			}, { initialThinking: "max", setModelResults: { "provider/standard": [false] } });
+			await harness.loadSkillsForTurn("build");
+			await harness.readSkill("build");
+			await harness.emit("agent_settled");
+			assert.deepEqual(harness.modelSelections, []);
+			assert.deepEqual(harness.thinkingSelections, []);
+			assert.equal(harness.ctx.thinkingLevel, "max");
+		}
+	});
+
+	it("keeps the first explicit route authoritative over a higher or unknown baseline", async () => {
+		for (const baseline of [model("provider", "premium"), model("unknown", "model")]) {
+			const harness = await createRouterHarness(skills, { initialModel: baseline, initialThinking: "max" });
+			await harness.invokeSkill("build");
+			assert.equal(harness.ctx.model.id, "standard");
+			assert.equal(harness.ctx.thinkingLevel, "high");
+			await harness.emit("agent_settled");
+			assert.equal(harness.ctx.model, baseline);
+			assert.equal(harness.ctx.thinkingLevel, "max");
+		}
+	});
+});
+
+describe("manual selection authority", () => {
+	const skills = { audit: { tier: "premium", rank: 40, effort: "xhigh" } };
+
+	it("stops routing after a manual selection during a turn before any routed run exists", async () => {
+		const harness = await createRouterHarness(skills, { initialModel: model("provider", "manual") });
+		await harness.loadSkillsForTurn("audit");
+		harness.setIdle(false);
+		await harness.selectManually(model("provider", "original"));
+		await harness.readSkill("audit");
+		assert.deepEqual(harness.modelSelectionAttempts, []);
+		await harness.invokeCommand("model-tier", "status");
+		assert.match(harness.notifications.at(-1)!, /manual model override: true/);
+
+		harness.setIdle(true);
+		await harness.emit("agent_settled");
+		await harness.loadSkillsForTurn("audit");
+		await harness.readSkill("audit");
+		assert.deepEqual(harness.modelSelections, ["provider/premium"]);
+	});
+
+	it("uses an idle manual selection as the next baseline rather than a permanent lock", async () => {
+		const harness = await createRouterHarness(skills, { initialModel: model("provider", "manual") });
+		await harness.selectManually(model("provider", "original"));
+		await harness.loadSkillsForTurn("audit");
+		await harness.readSkill("audit");
+		assert.deepEqual(harness.modelSelections, ["provider/premium"]);
+	});
+
+	it("does not route over a manual selection made while initial consent is pending", async () => {
+		const harness = await createRouterHarness({ audit: { ...skills.audit, metered: true } }, {
+			onConfirm: async () => { await harness.selectManually(model("provider", "manual")); },
+		});
+		await harness.invokeSkill("audit");
+		assert.equal(harness.confirmations.length, 1);
+		assert.deepEqual(harness.modelSelectionAttempts, []);
+		assert.deepEqual(harness.thinkingSelections, []);
+		await harness.emit("agent_settled");
+		assert.equal(harness.ctx.model.id, "manual");
+	});
+
+	it("does not route over a manual selection made while nested consent is pending", async () => {
+		const harness = await createRouterHarness({
+			build: { tier: "standard", rank: 20 }, audit: { ...skills.audit, metered: true },
+		}, { onConfirm: async () => { await harness.selectManually(model("provider", "manual")); } });
+		await harness.invokeSkill("build");
+		await harness.invokeSkill("audit");
+		assert.deepEqual(harness.modelSelections, ["provider/standard"]);
+		assert.deepEqual(harness.thinkingSelections, ["high"]);
+		await harness.emit("agent_settled");
+		assert.equal(harness.ctx.model.id, "manual");
+	});
+
+	it("does not claim routing or change thinking after another selection during a model switch", async () => {
+		const harness = await createRouterHarness(skills, {
+			onSetModel: async () => { await harness.selectManually(model("provider", "manual")); },
+		});
+		await harness.invokeSkill("audit");
+		assert.deepEqual(harness.thinkingSelections, []);
+		await harness.emit("message_end", { message: assistantMessage("provider", "manual") });
+		await harness.emit("agent_settled");
+		assert.deepEqual(harness.usageRecords, []);
+		assert.deepEqual(harness.modelSelectionAttempts, ["provider/premium"]);
+		assert.equal(harness.ctx.model.id, "manual");
+	});
+
+	it("does not restore thinking over another selection during restoration", async () => {
+		const harness = await createRouterHarness(skills, {
+			onSetModel: async (target) => {
+				if (target.id === "original") await harness.selectManually(model("provider", "manual"));
+			},
+		});
+		await harness.invokeSkill("audit");
+		await harness.emit("agent_settled");
+		assert.deepEqual(harness.thinkingSelections, ["xhigh"]);
+		assert.equal(harness.ctx.model.id, "manual");
+		await harness.invokeCommand("model-tier", "status");
+		assert.equal(lastRouteDecision(harness).restoration, "cancelled-by-manual-override");
+	});
+});
 
 describe("extension lifecycle", () => {
 	it("routes economy, standard, and premium while honoring declared effort", async () => {
