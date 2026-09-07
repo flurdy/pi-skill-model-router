@@ -1,6 +1,7 @@
 {
   "enabled": true,
   "routeImplicitSkillReads": true,
+  "implicitBaselinePolicy": "downshift",
   "usageLedger": {
     "enabled": false,
     "retentionDays": 30,

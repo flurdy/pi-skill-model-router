@@ -275,6 +275,41 @@ describe("candidate selection", () => {
 });
 
 describe("configuration", () => {
+	it("defaults implicit baselines to downshift and accepts the global floor policy", () => {
+		const root = mkdtempSync(join(tmpdir(), "model-tier-router-"));
+		for (const policy of [undefined, "downshift", "floor"]) {
+			writeFileSync(join(root, "model-tier-router.json"), JSON.stringify({ implicitBaselinePolicy: policy }));
+			const result = loadRouterConfig({ agentDir: root, cwd: join(root, "project"), projectTrusted: false });
+			assert.equal(result.config.implicitBaselinePolicy, policy ?? "downshift");
+			assert.deepEqual(result.warnings, []);
+		}
+	});
+
+	it("falls back to floor with a warning for invalid implicit baseline policy", () => {
+		const root = mkdtempSync(join(tmpdir(), "model-tier-router-"));
+		for (const policy of [null, false, 1, {}, ["downshift"], "typo"]) {
+			writeFileSync(join(root, "model-tier-router.json"), JSON.stringify({ implicitBaselinePolicy: policy }));
+			const result = loadRouterConfig({ agentDir: root, cwd: join(root, "project"), projectTrusted: false });
+			assert.equal(result.config.implicitBaselinePolicy, "floor");
+			assert.match(result.warnings.join("\n"), /implicitBaselinePolicy.*invalid.*floor/);
+		}
+	});
+
+	it("ignores project implicit baseline policies without weakening the global choice", () => {
+		const root = mkdtempSync(join(tmpdir(), "model-tier-router-"));
+		const cwd = join(root, "project");
+		mkdirSync(join(cwd, ".pi"), { recursive: true });
+		for (const globalPolicy of ["floor", "downshift"]) {
+			for (const projectPolicy of ["floor", "downshift", "typo"]) {
+				writeFileSync(join(root, "model-tier-router.json"), JSON.stringify({ implicitBaselinePolicy: globalPolicy }));
+				writeFileSync(join(cwd, ".pi", "model-tier-router.json"), JSON.stringify({ implicitBaselinePolicy: projectPolicy }));
+				const result = loadRouterConfig({ agentDir: root, cwd, projectTrusted: true });
+				assert.equal(result.config.implicitBaselinePolicy, globalPolicy);
+				assert.match(result.warnings.join("\n"), /implicitBaselinePolicy is global-only and was ignored/);
+			}
+		}
+	});
+
 	it("ships only the portable three-tier taxonomy", () => {
 		const example = JSON.parse(
 			readFileSync(new URL("./model-tier-router.example.json", import.meta.url), "utf8"),
@@ -744,6 +779,7 @@ interface RouterHarnessOptions {
 	modelPolicies?: Record<string, { metered: boolean; consent?: string }>;
 	random?: () => number;
 	routeImplicitSkillReads?: boolean;
+	implicitBaselinePolicy?: string;
 	setModelResults?: Record<string, boolean[]>;
 }
 
@@ -831,6 +867,7 @@ async function createRouterHarness(
 		JSON.stringify({
 			enabled: true,
 			routeImplicitSkillReads: options.routeImplicitSkillReads ?? true,
+			implicitBaselinePolicy: options.implicitBaselinePolicy,
 			modelPolicies,
 			...(options.legacyRestoreAfterRun === undefined ? {} : { restoreAfterRun: options.legacyRestoreAfterRun }),
 			tiers: globalTiers,
@@ -1018,12 +1055,38 @@ function lastRouteDecision(harness: RouterHarness): RouteDecisionRecord {
 
 describe("first implicit route", () => {
 	const skills = {
+		scan: { tier: "economy", rank: 10, effort: "medium" },
 		build: { tier: "standard", rank: 20, effort: "high" },
 		audit: { tier: "premium", rank: 40, effort: "xhigh" },
 	};
 
-	it("retains a premium baseline for a first implicit standard skill without owning restoration", async () => {
-		const harness = await createRouterHarness(skills, { initialThinking: "xhigh" });
+	it("downshifts a default standard baseline to economy with skill effort and restores both", async () => {
+		const harness = await createRouterHarness(skills, {
+			initialModel: model("provider", "standard"), initialThinking: "high",
+		});
+		await harness.loadSkillsForTurn("scan");
+		await harness.readSkill("scan");
+		assert.deepEqual(harness.modelSelections, ["provider/economy"]);
+		assert.deepEqual(harness.thinkingSelections, ["medium"]);
+		assert.deepEqual(harness.confirmations, []);
+		await harness.invokeCommand("model-tier", "status");
+		assert.match(harness.notifications.at(-1)!, /implicit baseline policy: downshift/);
+		assert.equal(lastRouteDecision(harness).reason, "initial-downshift");
+		assert.equal(lastRouteDecision(harness).effectiveTier, "economy");
+		assert.equal(lastRouteDecision(harness).restoration, "pending");
+		assert.deepEqual(lastRouteDecision(harness).warnings, []);
+		await harness.emit("message_end", { message: assistantMessage("provider", "economy") });
+		assert.equal(harness.usageRecords[0]?.tier, "economy");
+		assert.equal(harness.usageRecords[0]?.thinking, "medium");
+		await harness.emit("agent_settled");
+		assert.deepEqual(harness.modelSelections, ["provider/economy", "provider/standard"]);
+		assert.deepEqual(harness.thinkingSelections, ["medium", "high"]);
+		await harness.invokeCommand("model-tier", "status");
+		assert.equal(lastRouteDecision(harness).restoration, "restored");
+	});
+
+	it("retains a premium baseline under floor policy without owning restoration", async () => {
+		const harness = await createRouterHarness(skills, { initialThinking: "xhigh", implicitBaselinePolicy: "floor" });
 		await harness.selectManually(model("provider", "premium"));
 		await harness.loadSkillsForTurn("build");
 		await harness.readSkill("build");
@@ -1175,6 +1238,187 @@ describe("first implicit route", () => {
 			assert.equal(harness.ctx.model, baseline);
 			assert.equal(harness.ctx.thinkingLevel, "max");
 		}
+	});
+});
+
+describe("implicit downshift safeguards", () => {
+	const skills = {
+		scan: { tier: "economy", rank: 10, effort: "medium" },
+		build: { tier: "standard", rank: 20, effort: "high" },
+		audit: { tier: "premium", rank: 40, effort: "xhigh" },
+	};
+
+	it("makes one weighted downshift draw from spend-eligible candidates", async () => {
+		let draws = 0;
+		const harness = await createRouterHarness({
+			...skills,
+			scan: { ...skills.scan, selection: "weighted-random", candidates: [
+				{ model: "provider/unknown", weight: 100 },
+				{ model: "provider/ask", metered: true, weight: 100 },
+				{ model: "provider/allowed", weight: 1 },
+			] },
+		}, {
+			initialModel: model("provider", "standard"), initialThinking: "high",
+			modelPolicies: { "provider/allowed": { metered: true, consent: "allow" } },
+			random: () => { draws++; return 0; },
+		});
+		await harness.loadSkillsForTurn("scan");
+		await harness.readSkill("scan");
+		assert.equal(draws, 1);
+		assert.deepEqual(harness.confirmations, []);
+		assert.deepEqual(harness.modelSelections, ["provider/allowed"]);
+		await harness.invokeCommand("model-tier", "status");
+		assert.equal(lastRouteDecision(harness).consentBasis, "configured");
+		assert.deepEqual(lastRouteDecision(harness).selectionPool, [{ model: "provider/allowed", weight: 1 }]);
+	});
+
+	for (const metered of [true, undefined]) {
+		it(`skips ${metered ? "metered-ask" : "unknown-cost"} first-available downshifts without fallback or repeated warnings`, async () => {
+			const harness = await createRouterHarness({
+				...skills,
+				scan: { ...skills.scan, candidates: [
+					{ model: "provider/economy", metered },
+					{ model: "provider/free", metered: false },
+				] },
+			}, { initialModel: model("provider", "standard"), initialThinking: "high" });
+			await harness.loadSkillsForTurn("scan");
+			await harness.readSkill("scan");
+			await harness.readSkill("scan");
+			assert.equal(harness.notifications.filter((line) => line.includes("implicit skill reads do not prompt")).length, 1);
+			await harness.invokeCommand("model-tier", "status");
+			assert.equal(lastRouteDecision(harness).reason, `${metered ? "metered" : "unknown-cost"}-implicit-skip`);
+			assert.equal(lastRouteDecision(harness).restoration, "not-applicable");
+			await harness.emit("agent_settled");
+			assert.deepEqual(harness.confirmations, []);
+			assert.deepEqual(harness.modelSelectionAttempts, []);
+			assert.deepEqual(harness.thinkingSelections, []);
+			assert.equal(harness.ctx.thinkingLevel, "high");
+		});
+	}
+
+	for (const unavailable of [true, false]) {
+		it(`retains original thinking after ${unavailable ? "unavailable" : "failed"} downshift selection without retrying`, async () => {
+			let draws = 0;
+			const harness = await createRouterHarness({
+				...skills,
+				scan: { ...skills.scan, available: !unavailable, selection: "weighted-random", candidates: [
+					{ model: "provider/economy", metered: false, weight: 1 },
+					{ model: "provider/alternative", metered: false, weight: 1 },
+				] },
+			}, {
+				initialModel: model("provider", "standard"), initialThinking: "high",
+				setModelResults: { "provider/economy": [false] }, random: () => { draws++; return 0; },
+			});
+			await harness.loadSkillsForTurn("scan");
+			await harness.readSkill("scan");
+			await harness.invokeCommand("model-tier", "status");
+			assert.equal(lastRouteDecision(harness).reason, unavailable ? "no-eligible-candidate" : "model-switch-failed");
+			assert.equal(lastRouteDecision(harness).restoration, "not-applicable");
+			await harness.emit("agent_settled");
+			assert.equal(draws, unavailable ? 0 : 1);
+			assert.deepEqual(harness.modelSelectionAttempts, unavailable ? [] : ["provider/economy"]);
+			assert.deepEqual(harness.modelSelections, []);
+			assert.deepEqual(harness.thinkingSelections, []);
+			assert.equal(harness.ctx.thinkingLevel, "high");
+		});
+	}
+
+	it("uses tier thinking when a downward skill omits effort", async () => {
+		const harness = await createRouterHarness({ ...skills, scan: { tier: "economy", rank: 10 } }, {
+			initialModel: model("provider", "standard"), initialThinking: "max",
+		});
+		await harness.loadSkillsForTurn("scan");
+		await harness.readSkill("scan");
+		assert.deepEqual(harness.thinkingSelections, ["high"]);
+	});
+
+	it("retains the downward skill thinking request through clamping and nested upgrades", async () => {
+		const harness = await createRouterHarness({
+			...skills, scan: { ...skills.scan, effort: "xhigh" },
+		}, {
+			initialModel: model("provider", "premium"), initialThinking: "max",
+			clampThinking: (level, id) => id === "economy" ? "off" : level,
+		});
+		await harness.loadSkillsForTurn("scan", "build");
+		await harness.readSkill("scan");
+		await harness.invokeCommand("model-tier", "status");
+		assert.match(harness.notifications.at(-1)!, /requested thinking: xhigh/);
+		await harness.readSkill("build");
+		assert.deepEqual(harness.thinkingSelections, ["off", "xhigh"]);
+		await harness.emit("agent_settled");
+		assert.equal(harness.ctx.thinkingLevel, "max");
+	});
+
+	it("does not downshift an active route for nested or queued skills", async () => {
+		const harness = await createRouterHarness(skills, {
+			initialModel: model("provider", "premium"), initialThinking: "max",
+		});
+		await harness.loadSkillsForTurn("build", "scan");
+		await harness.readSkill("build");
+		harness.setIdle(false);
+		await harness.invokeSkill("scan", { streamingBehavior: "steer" });
+		await harness.invokeSkill("scan", { streamingBehavior: "followUp" });
+		await harness.readSkill("scan");
+		assert.deepEqual(harness.modelSelections, ["provider/standard"]);
+		assert.deepEqual(harness.thinkingSelections, ["high"]);
+		await harness.invokeCommand("model-tier", "status");
+		assert.equal(lastRouteDecision(harness).reason, "retain-lower");
+		assert.equal(lastRouteDecision(harness).effectiveTier, "standard");
+		harness.setIdle(true);
+		await harness.emit("agent_settled");
+		assert.equal(harness.ctx.model.id, "premium");
+		assert.equal(harness.ctx.thinkingLevel, "max");
+	});
+
+	it("preserves an idle manual model choice with off until routing is reenabled", async () => {
+		const harness = await createRouterHarness(skills, { initialThinking: "max" });
+		await harness.invokeCommand("model-tier", "off");
+		await harness.selectManually(model("provider", "premium"));
+		await harness.loadSkillsForTurn("scan");
+		await harness.readSkill("scan");
+		await harness.invokeSkill("scan");
+		await harness.emit("agent_settled");
+		assert.deepEqual(harness.modelSelectionAttempts, []);
+		assert.deepEqual(harness.thinkingSelections, []);
+		assert.equal(harness.ctx.model.id, "premium");
+		assert.equal(harness.ctx.thinkingLevel, "max");
+		await harness.invokeCommand("model-tier", "on");
+		await harness.loadSkillsForTurn("scan");
+		await harness.readSkill("scan");
+		assert.deepEqual(harness.modelSelections, ["provider/economy"]);
+	});
+
+	it("leaves a manual override made during downshift selection authoritative", async () => {
+		const harness = await createRouterHarness(skills, {
+			initialModel: model("provider", "standard"), initialThinking: "high",
+			onSetModel: async () => { await harness.selectManually(model("provider", "manual")); },
+		});
+		await harness.loadSkillsForTurn("scan");
+		await harness.readSkill("scan");
+		await harness.emit("message_end", { message: assistantMessage("provider", "manual") });
+		await harness.emit("agent_settled");
+		assert.deepEqual(harness.modelSelectionAttempts, ["provider/economy"]);
+		assert.deepEqual(harness.thinkingSelections, []);
+		assert.deepEqual(harness.usageRecords, []);
+		assert.equal(harness.ctx.model.id, "manual");
+	});
+
+	it("blocks additional downshifts while restoration is owed and retries the original baseline", async () => {
+		const harness = await createRouterHarness(skills, {
+			initialModel: model("provider", "premium"), initialThinking: "max",
+			setModelResults: { "provider/premium": [false, false, true] },
+		});
+		await harness.loadSkillsForTurn("build", "scan");
+		await harness.readSkill("build");
+		await harness.emit("agent_settled");
+		await harness.loadSkillsForTurn("scan");
+		await harness.readSkill("scan");
+		assert.match(harness.notifications.join("\n"), /skipped scan while restoration.*owed/);
+		assert.deepEqual(harness.modelSelections, ["provider/standard"]);
+		await harness.emit("agent_settled");
+		assert.deepEqual(harness.modelSelectionAttempts, ["provider/standard", "provider/premium", "provider/premium", "provider/premium"]);
+		assert.equal(harness.ctx.model.id, "premium");
+		assert.equal(harness.ctx.thinkingLevel, "max");
 	});
 });
 

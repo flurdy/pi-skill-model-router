@@ -84,7 +84,8 @@ From a source checkout, copy `./model-tier-router.example.json` instead.
 |---|---|
 | `enabled` | Enables routing when the extension loads. |
 | `routeImplicitSkillReads` | Allows loaded skill files read by the model to request a route. |
-| `tiers.<name>.rank` | Orders nested upgrades and first-implicit-route baseline comparisons. |
+| `implicitBaselinePolicy` | Global-only `downshift` (default) or `floor` for first implicit reads. Invalid values warn and use `floor`. |
+| `tiers.<name>.rank` | Orders nested upgrades and classifies first-implicit baselines. |
 | `tiers.<name>.thinking` | Default thinking level when the skill omits `effort`. |
 | `tiers.<name>.selection` | `first-available` (default) or `weighted-random`. |
 | `tiers.<name>.candidates` | Exact models and, for weighted selection, integer weights from 1 to 100. |
@@ -120,7 +121,7 @@ A trusted project can override top-level options and complete tier entries in:
 <project>/.pi/model-tier-router.json
 ```
 
-A project tier replaces the global tier with the same name. Other global tiers remain available. Spend authority stays global: project `modelPolicies` and `usageLedger` are ignored, and project candidates cannot weaken a global metered classification.
+A project tier replaces the global tier with the same name. Other global tiers remain available. Project `implicitBaselinePolicy`, `modelPolicies`, and `usageLedger` are ignored. Project candidates cannot weaken a global metered classification. The existing `enabled` and `routeImplicitSkillReads` options remain project-overridable.
 
 ## Routing behavior
 
@@ -135,9 +136,13 @@ Supported effort values are `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, 
 
 The first successful route snapshots the current model and thinking level. Nested skills may select only higher-ranked tiers or raise requested thinking. Pi can clamp effective thinking to model capabilities; the router retains the higher request for later upgrades. The original model and thinking are restored when the run settles.
 
-For a **first implicit skill read**, the current exact `provider/model` must appear in enabled candidates of valid configured tiers at one distinct rank. A lower baseline rank permits routing through the usual spend gates without lowering requested thinking. An equal/higher rank, conflicting ranks, or no match retains **both model and thinking**, without drawing a candidate, creating a routed run, or owing restoration. Multiple memberships at the same rank are valid. Disabled candidates and disabled tiers provide no baseline evidence. Retention is reported in `/model-tier status` with effective tier `(baseline)`; a later higher-tier read can still qualify.
+For a **first implicit skill read**, the current exact `provider/model` must appear in enabled candidates of valid configured tiers at one distinct rank. Multiple memberships at the same rank are valid; disabled candidates/tiers provide no evidence. Equal-rank, unknown, or conflicting-rank baselines retain **both model and thinking**, without a candidate draw, routed run, or restoration obligation.
 
-These are configured-rank guarantees, not model-quality judgments. Unlisted models cannot automatically route through an implicit read; use an explicit `/skill:name` instead. A **first explicit skill command** keeps its existing authority to select the requested tier and thinking, including a lower tier, subject to consent. Once a routed run exists, nested no-downshift rules apply to either invocation source.
+**Default change:** `implicitBaselinePolicy: "downshift"` permits a known higher-ranked baseline to route to a lower tier through the usual spend gates, using the skill's effort (or tier thinking). Thus standard/high can become economy/medium. Set global `implicitBaselinePolicy: "floor"` before loading this version to retain the previous no-downshift behavior. Upward first-implicit routes still preserve at least current thinking. Status reports the policy and successful `initial-downshift` decisions; retained decisions use effective tier `(baseline)`.
+
+These are configured-rank guarantees, not model-quality or cost judgments. A loaded skill read can trigger routing even when read only for context; the router cannot infer execution intent. For a deliberate model choice, run `/model-tier off` **while idle, before selecting the model or starting work**. This prevents explicit and implicit routing; `/model-tier on` resumes it. Startup and same-model choices cannot be detected automatically. `floor` prevents downward routing, not all routing.
+
+A **first explicit skill command**, while routing is enabled, may select its requested tier and thinking even for a higher or unknown baseline, subject to consent. Once a routed run exists, nested no-downshift rules apply to either invocation source.
 
 Routing boundaries:
 
@@ -145,7 +150,7 @@ Routing boundaries:
 - Model-initiated skill reads route only when `routeImplicitSkillReads` is enabled and the read path exactly matches a skill loaded for that turn.
 - Plain prompts do not select a tier.
 - Skills queued while another run is streaming keep the active route because Pi has no safe message-scoped routing boundary for them.
-- An idle manual selection establishes the next baseline. An observed model selection during a turn stops further routing and cancels automatic restoration, even before the first routed skill. Pending consent/switch operations recheck state before applying thinking or claiming a route.
+- An idle manual selection establishes the next baseline, not a persistent pin; `downshift` may subsequently lower it. An observed model selection during a turn stops further routing and cancels automatic restoration, even before the first routed skill. Pending consent/switch operations recheck state before applying thinking or claiming a route.
 - Pi exposes no startup-choice or selection-initiator provenance and emits no event for same-model selections. Other extensions' non-restore selections are conservatively treated as manual; only the router's expected target event is ignored. This is not an atomic model-selection lock.
 - On Pi 0.85.0, extension model/thinking setters change session history but not global defaults. Older supported Pi versions may persist defaults; see the assessment below.
 
@@ -184,10 +189,10 @@ The router never performs post-launch provider fallback. Any future fallback mus
 /model-tier off
 ```
 
-- `status` reports the active route, restoration state, configuration paths and warnings, ledger health, and the last route decision.
+- `status` reports the implicit baseline policy, active route, restoration state, configuration paths and warnings, ledger health, and the last route decision.
 - `usage` summarizes locally observed Pi response counters by tier and exact model.
-- `reload` rereads router configuration.
-- `on` and `off` are in-memory overrides; they do not edit files.
+- `reload` rereads router configuration and clears the `on`/`off` override.
+- `on` and `off` are in-memory overrides; they do not edit files or survive Pi `/reload` or restart. `off` prevents new routing attempts, not in-flight consent/setters or restoration already owed; use it while idle for model preservation.
 
 ## Usage ledger
 

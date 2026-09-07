@@ -17,9 +17,12 @@ export interface UsageLedgerConfig {
 	maxBytes: number;
 }
 
+export type ImplicitBaselinePolicy = "downshift" | "floor";
+
 export interface RouterConfig {
 	enabled: boolean;
 	routeImplicitSkillReads: boolean;
+	implicitBaselinePolicy: ImplicitBaselinePolicy;
 	usageLedger: UsageLedgerConfig;
 	tiers: Record<string, TierRoute>;
 	tierSources: Record<string, TierConfigurationSource>;
@@ -52,6 +55,7 @@ function emptyTiers(): Record<string, TierRoute> {
 const DEFAULT_CONFIG: RouterConfig = {
 	enabled: true,
 	routeImplicitSkillReads: true,
+	implicitBaselinePolicy: "downshift",
 	usageLedger: { enabled: false, retentionDays: 30, maxBytes: 10 * 1024 * 1024 },
 	tiers: emptyTiers(),
 	tierSources: emptyRecord<TierConfigurationSource>(),
@@ -191,6 +195,7 @@ function parseModelPolicies(value: unknown, path: string, warnings: string[]): R
 interface PartialRouterConfig {
 	enabled?: boolean;
 	routeImplicitSkillReads?: boolean;
+	implicitBaselinePolicy?: ImplicitBaselinePolicy;
 	usageLedger?: UsageLedgerConfig;
 	tiers: Record<string, TierRoute>;
 	modelPolicies?: Record<string, ModelPolicy>;
@@ -207,6 +212,14 @@ function parseConfig(value: unknown, path: string, warnings: string[]): PartialR
 		if (input[key] === undefined) continue;
 		if (typeof input[key] !== "boolean") warnings.push(`${path}: ${key} must be boolean`);
 		else parsed[key] = input[key];
+	}
+	if (input.implicitBaselinePolicy !== undefined) {
+		if (input.implicitBaselinePolicy === "downshift" || input.implicitBaselinePolicy === "floor") {
+			parsed.implicitBaselinePolicy = input.implicitBaselinePolicy;
+		} else {
+			warnings.push(`${path}: implicitBaselinePolicy is invalid; using conservative floor policy`);
+			parsed.implicitBaselinePolicy = "floor";
+		}
 	}
 	if (input.usageLedger !== undefined) {
 		if (!input.usageLedger || typeof input.usageLedger !== "object" || Array.isArray(input.usageLedger)) {
@@ -272,6 +285,7 @@ function mergeConfig(base: RouterConfig, override: PartialRouterConfig, source: 
 	return {
 		enabled: override.enabled ?? base.enabled,
 		routeImplicitSkillReads: override.routeImplicitSkillReads ?? base.routeImplicitSkillReads,
+		implicitBaselinePolicy: override.implicitBaselinePolicy ?? base.implicitBaselinePolicy,
 		usageLedger: override.usageLedger ?? base.usageLedger,
 		tiers: Object.assign(emptyTiers(), base.tiers, override.tiers),
 		tierSources,
@@ -315,6 +329,10 @@ export function loadRouterConfig(options: LoadConfigOptions): LoadedRouterConfig
 		if (projectValue !== undefined) {
 			const parsed = parseConfig(projectValue, projectPath, warnings);
 			if (parsed) {
+				if (parsed.implicitBaselinePolicy) {
+					warnings.push(`${projectPath}: implicitBaselinePolicy is global-only and was ignored`);
+					parsed.implicitBaselinePolicy = undefined;
+				}
 				if (parsed.usageLedger) {
 					warnings.push(`${projectPath}: usageLedger is global-only and was ignored`);
 					parsed.usageLedger = undefined;

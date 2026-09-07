@@ -309,9 +309,11 @@ export default function modelTierRouter(pi: ExtensionAPI, options: ModelTierRout
 			return;
 		}
 
+		let initialImplicitDownshift = false;
 		if (!run && source === "implicit-read") {
 			const baseline = baselineRank(modelIdentity(ctx.model), config.tiers);
-			if (baseline.rank === undefined || route.rank <= baseline.rank) {
+			if (baseline.rank === undefined || route.rank === baseline.rank
+				|| (config.implicitBaselinePolicy === "floor" && route.rank < baseline.rank)) {
 				const reason = baseline.rank === undefined
 					? baseline.tiers.length ? "baseline-ambiguous" : "baseline-unknown"
 					: route.rank < baseline.rank ? "baseline-retain-lower" : "baseline-retain-equal";
@@ -323,6 +325,7 @@ export default function modelTierRouter(pi: ExtensionAPI, options: ModelTierRout
 				recordRouteDecision(ctx, metadata.tier, undefined, "not-applicable", reason, [message], "not-applicable", "(baseline)");
 				return;
 			}
+			initialImplicitDownshift = route.rank < baseline.rank;
 		}
 
 		const requestedThinking = metadata.effort ?? route.thinking;
@@ -442,7 +445,7 @@ export default function modelTierRouter(pi: ExtensionAPI, options: ModelTierRout
 		const originalThinking = run?.originalThinking ?? pi.getThinkingLevel();
 		const selectedThinking = run
 			? maxThinkingLevel(maxThinkingLevel(run.requestedThinking, requestedThinking), pi.getThinkingLevel())
-			: source === "implicit-read" ? maxThinkingLevel(requestedThinking, originalThinking) : requestedThinking;
+			: source === "implicit-read" && !initialImplicitDownshift ? maxThinkingLevel(requestedThinking, originalThinking) : requestedThinking;
 		expectedModelSelection = modelId(target);
 		let switched = false;
 		try {
@@ -464,7 +467,7 @@ export default function modelTierRouter(pi: ExtensionAPI, options: ModelTierRout
 		}
 
 		pi.setThinkingLevel(selectedThinking);
-		const activeDecision = recordRouteDecision(ctx, metadata.tier, candidate, consentBasis, decision, [], "pending", metadata.tier, candidatePolicy, selection);
+		const activeDecision = recordRouteDecision(ctx, metadata.tier, candidate, consentBasis, initialImplicitDownshift ? "initial-downshift" : decision, [], "pending", metadata.tier, candidatePolicy, selection);
 		if (!run) {
 			run = {
 				originalModel,
@@ -681,6 +684,7 @@ export default function modelTierRouter(pi: ExtensionAPI, options: ModelTierRout
 			}
 			const lines = [
 				`enabled: ${isEnabled()}`,
+				`implicit baseline policy: ${loaded?.config.implicitBaselinePolicy ?? "(unloaded)"}`,
 				`active tier: ${run?.activeTier ?? "(none)"}`,
 				`requested thinking: ${run?.requestedThinking ?? "(none)"}`,
 				`active thinking: ${run?.activeThinking ?? "(none)"}`,
