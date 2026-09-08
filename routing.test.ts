@@ -801,6 +801,7 @@ interface RouterHarness {
 	modelSelections: string[];
 	thinkingSelections: string[];
 	notifications: string[];
+	notificationEvents: Array<{ message: string; type: "info" | "warning" | "error" | undefined }>;
 	usageRecords: UsageRecordV1[];
 }
 
@@ -903,6 +904,7 @@ async function createRouterHarness(
 	const modelSelections: string[] = [];
 	const thinkingSelections: string[] = [];
 	const notifications: string[] = [];
+	const notificationEvents: Array<{ message: string; type: "info" | "warning" | "error" | undefined }> = [];
 	const usageRecords: UsageRecordV1[] = [];
 
 	const ctx = {
@@ -925,7 +927,10 @@ async function createRouterHarness(
 				await options.onConfirm?.();
 				return options.confirm ?? true;
 			},
-			notify: (message: string) => notifications.push(message),
+			notify: (message: string, type?: "info" | "warning" | "error") => {
+				notifications.push(message);
+				notificationEvents.push({ message, type });
+			},
 			setStatus: () => undefined,
 		},
 	};
@@ -1041,6 +1046,7 @@ async function createRouterHarness(
 		modelSelections,
 		thinkingSelections,
 		notifications,
+		notificationEvents,
 		usageRecords,
 	};
 }
@@ -1096,11 +1102,17 @@ describe("first implicit route", () => {
 		assert.deepEqual(harness.modelSelectionAttempts, []);
 		assert.deepEqual(harness.thinkingSelections, []);
 		assert.deepEqual(harness.confirmations, []);
+		assert.deepEqual(harness.notificationEvents.at(-1), {
+			message: "model-tier: kept provider/premium (thinking:xhigh) — baseline premium above standard for build",
+			type: "info",
+		});
 		await harness.invokeCommand("model-tier", "status");
 		assert.equal(lastRouteDecision(harness).reason, "baseline-retain-lower");
 		assert.equal(lastRouteDecision(harness).effectiveTier, "(baseline)");
 		assert.equal(lastRouteDecision(harness).restoration, "not-applicable");
+		assert.deepEqual(lastRouteDecision(harness).warnings, []);
 		assert.match(harness.notifications.at(-1)!, /active tier: \(none\)/);
+		assert.match(harness.notifications.at(-1)!, /warnings: \(none\)/);
 
 		await harness.emit("message_end", { message: assistantMessage("provider", "premium") });
 		await harness.emit("agent_settled");
@@ -1123,8 +1135,19 @@ describe("first implicit route", () => {
 		assert.equal(harness.ctx.thinkingLevel, "low");
 		assert.equal(draws, 0);
 		assert.deepEqual(harness.modelSelectionAttempts, []);
+		assert.deepEqual(harness.notificationEvents.at(-1), {
+			message: "model-tier: kept provider/peer (thinking:low) — already standard for build",
+			type: "info",
+		});
+		assert.doesNotMatch(harness.notifications.at(-1)!, /explicit \/skill:/);
+		await harness.readSkill("build");
+		assert.equal(
+			harness.notificationEvents.filter(({ message }) => message.startsWith("model-tier: kept ")).length,
+			1,
+		);
 		await harness.invokeCommand("model-tier", "status");
 		assert.equal(lastRouteDecision(harness).reason, "baseline-retain-equal");
+		assert.deepEqual(lastRouteDecision(harness).warnings, []);
 	});
 
 	it("retains an unconfigured baseline without inferring rank from its name", async () => {
@@ -1137,6 +1160,8 @@ describe("first implicit route", () => {
 
 		assert.deepEqual(harness.modelSelectionAttempts, []);
 		assert.deepEqual(harness.thinkingSelections, []);
+		assert.equal(harness.notificationEvents.at(-1)?.type, "warning");
+		assert.match(harness.notificationEvents.at(-1)?.message ?? "", /explicit \/skill:audit/);
 		await harness.invokeCommand("model-tier", "status");
 		assert.equal(lastRouteDecision(harness).reason, "baseline-unknown");
 		assert.match(lastRouteDecision(harness).warnings.join("\n"), /explicit \/skill:/);
@@ -1151,6 +1176,9 @@ describe("first implicit route", () => {
 		await harness.readSkill("audit");
 
 		assert.deepEqual(harness.modelSelectionAttempts, []);
+		assert.equal(harness.notificationEvents.at(-1)?.type, "warning");
+		assert.match(harness.notificationEvents.at(-1)?.message ?? "", /ambiguous across premium, other/);
+		assert.match(harness.notificationEvents.at(-1)?.message ?? "", /explicit \/skill:audit/);
 		await harness.invokeCommand("model-tier", "status");
 		assert.equal(lastRouteDecision(harness).reason, "baseline-ambiguous");
 	});
@@ -1846,6 +1874,8 @@ describe("extension lifecycle", () => {
 		assert.equal(draws, 0);
 		assert.deepEqual(harness.modelSelectionAttempts, []);
 		assert.equal(harness.ctx.model.id, "original");
+		assert.equal(harness.notificationEvents.at(-1)?.type, "warning");
+		assert.match(harness.notificationEvents.at(-1)?.message ?? "", /invalid configuration disabled routing/);
 		await harness.emit("agent_settled");
 
 		await harness.invokeCommand("model-tier", "status");

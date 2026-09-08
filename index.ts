@@ -126,7 +126,7 @@ export default function modelTierRouter(pi: ExtensionAPI, options: ModelTierRout
 	let usageLedgerConfig: UsageLedgerConfig | undefined;
 	let injectedUsageLedgerStarted = false;
 	let latestRouteDecision: RouteDecisionRecord | undefined;
-	const warningKeys = new Set<string>();
+	const noticeKeys = new Set<string>();
 	const unavailableWarnings: string[] = [];
 
 	function isEnabled(): boolean {
@@ -137,9 +137,15 @@ export default function modelTierRouter(pi: ExtensionAPI, options: ModelTierRout
 		if (ctx.hasUI) ctx.ui.notify(message, type);
 	}
 
+	function infoOnce(ctx: ExtensionContext, key: string, message: string): void {
+		if (noticeKeys.has(key)) return;
+		noticeKeys.add(key);
+		notify(ctx, `model-tier: ${message}`, "info");
+	}
+
 	function warnOnce(ctx: ExtensionContext, key: string, message: string): void {
-		if (warningKeys.has(key)) return;
-		warningKeys.add(key);
+		if (noticeKeys.has(key)) return;
+		noticeKeys.add(key);
 		unavailableWarnings.push(message);
 		notify(ctx, `model-tier: ${message}`, "warning");
 	}
@@ -317,12 +323,20 @@ export default function modelTierRouter(pi: ExtensionAPI, options: ModelTierRout
 				const reason = baseline.rank === undefined
 					? baseline.tiers.length ? "baseline-ambiguous" : "baseline-unknown"
 					: route.rank < baseline.rank ? "baseline-retain-lower" : "baseline-retain-equal";
-				const detail = baseline.rank === undefined
-					? `baseline rank is ${baseline.tiers.length ? `ambiguous across ${baseline.tiers.join(", ")}` : "unknown"}`
-					: `baseline rank ${baseline.rank} (${baseline.tiers.join(", ")}) meets or exceeds ${metadata.tier}`;
-				const message = `${detail}; retained ${modelId(ctx.model)} and thinking:${pi.getThinkingLevel()} for implicit ${skillName}; use an explicit /skill:${skillName} to request routing`;
-				warnOnce(ctx, `${reason}:${skillName}:${modelId(ctx.model)}`, message);
-				recordRouteDecision(ctx, metadata.tier, undefined, "not-applicable", reason, [message], "not-applicable", "(baseline)");
+				const noticeKey = `${reason}:${skillName}:${modelId(ctx.model)}`;
+				if (baseline.rank === undefined) {
+					const detail = `baseline rank is ${baseline.tiers.length ? `ambiguous across ${baseline.tiers.join(", ")}` : "unknown"}`;
+					const message = `${detail}; retained ${modelId(ctx.model)} and thinking:${pi.getThinkingLevel()} for implicit ${skillName}; use an explicit /skill:${skillName} to request routing`;
+					warnOnce(ctx, noticeKey, message);
+					recordRouteDecision(ctx, metadata.tier, undefined, "not-applicable", reason, [message], "not-applicable", "(baseline)");
+				} else {
+					const detail = reason === "baseline-retain-equal"
+						? `already ${metadata.tier}`
+						: `baseline ${baseline.tiers.join(", ")} above ${metadata.tier}`;
+					const message = `kept ${modelId(ctx.model)} (thinking:${pi.getThinkingLevel()}) — ${detail} for ${skillName}`;
+					infoOnce(ctx, noticeKey, message);
+					recordRouteDecision(ctx, metadata.tier, undefined, "not-applicable", reason, [], "not-applicable", "(baseline)");
+				}
 				return;
 			}
 			initialImplicitDownshift = route.rank < baseline.rank;
@@ -630,7 +644,7 @@ export default function modelTierRouter(pi: ExtensionAPI, options: ModelTierRout
 		if (!agentTurnActive) manualModelOverride = false;
 		pendingExplicitRoute = undefined;
 		loadedSkills.clear();
-		warningKeys.clear();
+		noticeKeys.clear();
 		unavailableWarnings.length = 0;
 	});
 

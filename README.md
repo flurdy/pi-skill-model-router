@@ -138,7 +138,7 @@ The first successful route snapshots the current model and thinking level. Neste
 
 For a **first implicit skill read**, the current exact `provider/model` must appear in enabled candidates of valid configured tiers at one distinct rank. Multiple memberships at the same rank are valid; disabled candidates/tiers provide no evidence. Equal-rank, unknown, or conflicting-rank baselines retain **both model and thinking**, without a candidate draw, routed run, or restoration obligation.
 
-**Default change:** `implicitBaselinePolicy: "downshift"` permits a known higher-ranked baseline to route to a lower tier through the usual spend gates, using the skill's effort (or tier thinking). Thus standard/high can become economy/medium. Set global `implicitBaselinePolicy: "floor"` before loading this version to retain the previous no-downshift behavior. Upward first-implicit routes still preserve at least current thinking. Status reports the policy and successful `initial-downshift` decisions; retained decisions use effective tier `(baseline)`.
+**Default change:** `implicitBaselinePolicy: "downshift"` permits a known higher-ranked baseline to route to a lower tier through the usual spend gates, using the skill's effort (or tier thinking). Thus standard/high can become economy/medium. Set global `implicitBaselinePolicy: "floor"` before loading this version to retain the previous no-downshift behavior. Upward first-implicit routes still preserve at least current thinking. Status reports the policy and successful `initial-downshift` decisions; retained decisions use effective tier `(baseline)`. Known equal- or higher-ranked retainments emit one terse informational notice per skill and model. Unknown or conflicting-rank baselines remain warnings and point to the explicit skill command because their routing intent is unresolved.
 
 These are configured-rank guarantees, not model-quality or cost judgments. A loaded skill read can trigger routing even when read only for context; the router cannot infer execution intent. For a deliberate model choice, run `/model-tier off` **while idle, before selecting the model or starting work**. This prevents explicit and implicit routing; `/model-tier on` resumes it. Startup and same-model choices cannot be detected automatically. `floor` prevents downward routing, not all routing.
 
@@ -189,7 +189,7 @@ The router never performs post-launch provider fallback. Any future fallback mus
 /model-tier off
 ```
 
-- `status` reports the implicit baseline policy, active route, restoration state, configuration paths and warnings, ledger health, and the last route decision.
+- `status` reports the implicit baseline policy, active route, restoration state, configuration paths and actionable warnings, ledger health, and the last route decision. Normal retained-baseline notices are represented by the decision's reason, model, and thinking fields rather than accumulated as warnings.
 - `usage` summarizes locally observed Pi response counters by tier and exact model.
 - `reload` rereads router configuration and clears the `on`/`off` override.
 - `on` and `off` are in-memory overrides; they do not edit files or survive Pi `/reload` or restart. `off` prevents new routing attempts, not in-flight consent/setters or restoration already owed; use it while idle for model preservation.
