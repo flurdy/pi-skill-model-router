@@ -316,7 +316,7 @@ export default function modelTierRouter(pi: ExtensionAPI, options: ModelTierRout
 		}
 
 		let initialImplicitDownshift = false;
-		if (!run && source === "implicit-read") {
+		if (!run && source === "implicit-read" && !route.routingDisabled) {
 			const baseline = baselineRank(modelIdentity(ctx.model), config.tiers);
 			if (baseline.rank === undefined || route.rank === baseline.rank
 				|| (config.implicitBaselinePolicy === "floor" && route.rank < baseline.rank)) {

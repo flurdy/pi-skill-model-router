@@ -1150,6 +1150,51 @@ describe("first implicit route", () => {
 		assert.deepEqual(lastRouteDecision(harness).warnings, []);
 	});
 
+	for (const rank of [20, 40]) {
+		for (const invalid of ["selection", "weight"]) {
+			it(`warns about invalid ${invalid} before retaining a rank-${rank} baseline`, async () => {
+				let draws = 0;
+				const harness = await createRouterHarness({
+					...skills,
+					peer: { tier: "peer", rank },
+				}, {
+					initialModel: model("provider", "peer"),
+					initialThinking: "max",
+					implicitBaselinePolicy: "floor",
+					random: () => { draws++; return 0; },
+				});
+				harness.setTierRoute("standard", {
+					rank: 20,
+					thinking: "high",
+					selection: invalid === "selection" ? "invalid" : "weighted-random",
+					candidates: [{ model: "provider/standard", metered: false, weight: invalid === "weight" ? 0 : 1 }],
+				});
+				await harness.invokeCommand("model-tier", "reload");
+				await harness.loadSkillsForTurn("build");
+				await harness.readSkill("build");
+
+				assert.deepEqual(harness.notificationEvents.at(-1), {
+					message: "model-tier: invalid configuration disabled routing for standard; see /model-tier status config warnings; retained provider/peer",
+					type: "warning",
+				});
+				await harness.readSkill("build");
+				assert.equal(harness.notificationEvents.filter(({ message }) => message.includes("invalid configuration disabled routing")).length, 1);
+				assert.equal(harness.notificationEvents.some(({ message }) => message.startsWith("model-tier: kept ")), false);
+				await harness.invokeCommand("model-tier", "status");
+				assert.equal(lastRouteDecision(harness).reason, "invalid-tier-configuration");
+				assert.equal(lastRouteDecision(harness).restoration, "not-applicable");
+				assert.match(lastRouteDecision(harness).warnings.join("\n"), /invalid configuration disabled routing/);
+				await harness.emit("agent_settled");
+				assert.equal(draws, 0);
+				assert.deepEqual(harness.modelSelectionAttempts, []);
+				assert.deepEqual(harness.thinkingSelections, []);
+				assert.deepEqual(harness.confirmations, []);
+				assert.equal(harness.ctx.model.id, "peer");
+				assert.equal(harness.ctx.thinkingLevel, "max");
+			});
+		}
+	}
+
 	it("retains an unconfigured baseline without inferring rank from its name", async () => {
 		const harness = await createRouterHarness(skills, {
 			initialModel: model("unconfigured", "economy"), initialThinking: "max",
@@ -1253,6 +1298,8 @@ describe("first implicit route", () => {
 			assert.deepEqual(harness.modelSelections, []);
 			assert.deepEqual(harness.thinkingSelections, []);
 			assert.equal(harness.ctx.thinkingLevel, "max");
+			assert.equal(harness.notificationEvents.at(-1)?.type, "warning");
+			assert.match(harness.notificationEvents.at(-1)?.message ?? "", unavailable ? /no available candidate/ : /could not select/);
 		}
 	});
 
