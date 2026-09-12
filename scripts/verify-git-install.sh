@@ -75,10 +75,11 @@ test "$(git -C "$installed_path" rev-parse HEAD)" = "$commit"
 test ! -e "$installed_path/model-tier-router.json"
 
 config_path="$agent_dir/model-tier-router.json"
-printf '%s\n' '{"enabled":false,"tiers":{}}' >"$config_path"
+printf '%s\n' '{"enabled":false,"tiers":{},"modelPolicies":{"fixture/model":{"metered":true,"consent":"allow"}}}' >"$config_path"
 printf '%s\n' \
 	'{"id":"commands","type":"get_commands"}' \
 	'{"id":"status","type":"prompt","message":"/model-tier status"}' \
+	'{"id":"policy","type":"prompt","message":"/model-tier policy fixture/model"}' \
 	| (
 		cd "$work_dir"
 		PI_CODING_AGENT_DIR="$agent_dir" \

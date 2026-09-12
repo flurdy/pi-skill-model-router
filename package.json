@@ -9,6 +9,10 @@
     "url": "git+https://github.com/flurdy/pi-skill-model-router.git"
   },
   "type": "module",
+  "exports": {
+    ".": "./index.ts",
+    "./policy": "./config.ts"
+  },
   "keywords": [
     "pi-package",
     "pi-extension",

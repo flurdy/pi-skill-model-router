@@ -1,5 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { createHash } from "node:crypto";
+import { join, resolve } from "node:path";
+import { resolveCandidatePolicy, type ResolvedCandidatePolicy } from "./routing.ts";
 import type {
 	ConfiguredConsentPolicy,
 	ModelPolicy,
@@ -62,10 +64,12 @@ const DEFAULT_CONFIG: RouterConfig = {
 	modelPolicies: emptyRecord<ModelPolicy>(),
 };
 
-function readJson(path: string, warnings: string[]): unknown | undefined {
+function readJson(path: string, warnings: string[], captureRevision?: (revision: string) => void): unknown | undefined {
 	if (!existsSync(path)) return undefined;
 	try {
-		return JSON.parse(readFileSync(path, "utf8"));
+		const content = readFileSync(path);
+		captureRevision?.(createHash("sha256").update(content).digest("hex"));
+		return JSON.parse(content.toString("utf8"));
 	} catch (error) {
 		warnings.push(`${path}: ${error instanceof Error ? error.message : String(error)}`);
 		return undefined;
@@ -162,9 +166,18 @@ function parseTier(name: string, value: unknown, path: string, warnings: string[
 	};
 }
 
-function parseModelPolicies(value: unknown, path: string, warnings: string[]): Record<string, ModelPolicy> | undefined {
+type PolicyBasis = "explicit" | "explicit-override" | "inline" | "conflict" | "invalid" | "missing" | "unavailable";
+
+interface PolicyDiagnostics {
+	invalidMap: boolean;
+	invalidModels: Set<string>;
+	bases: Record<string, PolicyBasis>;
+}
+
+function parseModelPolicies(value: unknown, path: string, warnings: string[], diagnostics?: PolicyDiagnostics): Record<string, ModelPolicy> | undefined {
 	if (!value || typeof value !== "object" || Array.isArray(value)) {
 		warnings.push(`${path}: modelPolicies must be an object`);
+		if (diagnostics) diagnostics.invalidMap = true;
 		return undefined;
 	}
 	const policies = emptyRecord<ModelPolicy>();
@@ -175,17 +188,22 @@ function parseModelPolicies(value: unknown, path: string, warnings: string[]): R
 		}
 		if (!policy || typeof policy !== "object" || Array.isArray(policy)) {
 			warnings.push(`${path}: model policy ${model} must be an object`);
+			diagnostics?.invalidModels.add(model);
 			continue;
 		}
 		const input = policy as Record<string, unknown>;
 		if (typeof input.metered !== "boolean") {
 			warnings.push(`${path}: model policy ${model} must declare a boolean metered flag`);
+			diagnostics?.invalidModels.add(model);
 			continue;
 		}
 		let consent: ConfiguredConsentPolicy = "ask";
 		if (input.consent !== undefined) {
 			if (input.consent === "ask" || input.consent === "allow") consent = input.consent;
-			else warnings.push(`${path}: model policy ${model} has invalid consent; defaulted to ask`);
+			else {
+				warnings.push(`${path}: model policy ${model} has invalid consent; defaulted to ask`);
+				diagnostics?.invalidModels.add(model);
+			}
 		}
 		policies[model] = { metered: input.metered, consent };
 	}
@@ -201,7 +219,7 @@ interface PartialRouterConfig {
 	modelPolicies?: Record<string, ModelPolicy>;
 }
 
-function parseConfig(value: unknown, path: string, warnings: string[]): PartialRouterConfig | undefined {
+function parseConfig(value: unknown, path: string, warnings: string[], diagnostics?: PolicyDiagnostics): PartialRouterConfig | undefined {
 	if (!value || typeof value !== "object" || Array.isArray(value)) {
 		warnings.push(`${path}: configuration must be an object`);
 		return undefined;
@@ -232,7 +250,7 @@ function parseConfig(value: unknown, path: string, warnings: string[]): PartialR
 			else parsed.usageLedger = { enabled: ledger.enabled, retentionDays: ledger.retentionDays as number, maxBytes: ledger.maxBytes as number };
 		}
 	}
-	if (input.modelPolicies !== undefined) parsed.modelPolicies = parseModelPolicies(input.modelPolicies, path, warnings);
+	if (input.modelPolicies !== undefined) parsed.modelPolicies = parseModelPolicies(input.modelPolicies, path, warnings, diagnostics);
 	if (input.tiers !== undefined) {
 		if (!input.tiers || typeof input.tiers !== "object" || Array.isArray(input.tiers)) {
 			warnings.push(`${path}: tiers must be an object`);
@@ -251,6 +269,7 @@ function deriveGlobalModelPolicies(
 	explicit: Record<string, ModelPolicy> | undefined,
 	path: string,
 	warnings: string[],
+	diagnostics?: PolicyDiagnostics,
 ): Record<string, ModelPolicy> {
 	const inline = emptyRecord<boolean>();
 	for (const tier of Object.values(tiers)) {
@@ -260,8 +279,10 @@ function deriveGlobalModelPolicies(
 			if (previous !== undefined && previous !== candidate.metered) {
 				warnings.push(`${path}: model ${candidate.model} has conflicting global candidate classifications; treated as metered`);
 				inline[candidate.model] = true;
+				if (diagnostics) diagnostics.bases[candidate.model] = "conflict";
 			} else if (previous === undefined) {
 				inline[candidate.model] = candidate.metered;
+				if (diagnostics) diagnostics.bases[candidate.model] = "inline";
 			}
 		}
 	}
@@ -271,6 +292,7 @@ function deriveGlobalModelPolicies(
 		policies[model] = { metered, consent: "ask" };
 	}
 	for (const [model, policy] of Object.entries(explicit ?? {})) {
+		if (diagnostics) diagnostics.bases[model] = diagnostics.bases[model] === "conflict" || (inline[model] !== undefined && inline[model] !== policy.metered) ? "explicit-override" : "explicit";
 		if (inline[model] !== undefined && inline[model] !== policy.metered) {
 			warnings.push(`${path}: model policy ${model} conflicts with global candidate classification; explicit policy wins`);
 		}
@@ -305,6 +327,44 @@ function warnForProjectClassificationGaps(config: RouterConfig, projectPath: str
 			}
 		}
 	}
+}
+
+export interface ModelPolicyEvidence {
+	version: 1;
+	runtime: "pi";
+	scope: "user";
+	source: {
+		owner: "@flurdy/pi-skill-model-router";
+		path: string;
+		status: "loaded" | "unavailable" | "invalid";
+		revision: string | null;
+	};
+	policies: Array<ResolvedCandidatePolicy & { model: string; basis: PolicyBasis }>;
+}
+
+/** Policy evidence only: the caller must independently prove launch identity and authorization. */
+export function queryModelPolicies(agentDir: string, models: readonly string[]): ModelPolicyEvidence {
+	if (!Array.isArray(models) || models.length < 1 || models.length > 32 || models.some((model) =>
+		typeof model !== "string" || model.length > 512 || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_./:+-]+$/.test(model) || model.endsWith("/"))) {
+		throw new Error("Expected 1..32 exact provider/model identities");
+	}
+	const path = resolve(agentDir, "model-tier-router.json");
+	const warnings: string[] = [];
+	let revision: string | null = null;
+	const value = readJson(path, warnings, (digest) => { revision = digest; });
+	const diagnostics: PolicyDiagnostics = { invalidMap: false, invalidModels: new Set(), bases: emptyRecord<PolicyBasis>() };
+	let parsed = value === undefined ? undefined : parseConfig(value, path, warnings, diagnostics);
+	if (diagnostics.invalidMap) parsed = undefined;
+	const policies = parsed ? deriveGlobalModelPolicies(parsed.tiers, parsed.modelPolicies, path, warnings, diagnostics) : emptyRecord<ModelPolicy>();
+	return {
+		version: 1, runtime: "pi", scope: "user",
+		source: { owner: "@flurdy/pi-skill-model-router", path, status: parsed ? "loaded" : revision ? "invalid" : "unavailable", revision },
+		policies: models.map((model) => ({
+			model,
+			...resolveCandidatePolicy({ model }, "global", diagnostics.invalidModels.has(model) ? undefined : policies[model]),
+			basis: !parsed ? "unavailable" : diagnostics.invalidModels.has(model) ? "invalid" : diagnostics.bases[model] ?? "missing",
+		})),
+	};
 }
 
 export function loadRouterConfig(options: LoadConfigOptions): LoadedRouterConfig {

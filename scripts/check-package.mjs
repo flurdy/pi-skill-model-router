@@ -8,6 +8,7 @@ const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const packageJson = JSON.parse(readFileSync(resolve(repositoryRoot, "package.json"), "utf8"));
 assert.ok(packageJson.keywords.includes("pi-package"), "package is missing the pi-package discovery keyword");
 assert.deepEqual(packageJson.pi, { extensions: ["./index.ts"] });
+assert.deepEqual(packageJson.exports, { ".": "./index.ts", "./policy": "./config.ts" });
 
 const allowedPackageFiles = [
 	"README.md",

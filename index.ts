@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext, Skill } from "@earendil-works/pi-coding-agent";
 import { CONFIG_DIR_NAME, getAgentDir, isToolCallEventType } from "@earendil-works/pi-coding-agent";
-import { loadRouterConfig, type LoadedRouterConfig, type UsageLedgerConfig } from "./config.ts";
+import { loadRouterConfig, queryModelPolicies, type LoadedRouterConfig, type UsageLedgerConfig } from "./config.ts";
 import { UsageLedger } from "./usage-ledger.ts";
 import { addUsageRecord, emptyUsageTotals, formatUsageSummary, normalizeUsage, type UsageRecordV1, type UsageTotals } from "./usage.ts";
 import {
@@ -657,9 +657,18 @@ export default function modelTierRouter(pi: ExtensionAPI, options: ModelTierRout
 	});
 
 	pi.registerCommand("model-tier", {
-		description: "Show routing state or Pi-normalized local usage; reload, enable, or disable routing",
+		description: "Show routing state, policy evidence or local usage; reload, enable, or disable routing",
 		handler: async (args, ctx) => {
 			const action = args.trim() || "status";
+			if (action.split(/\s+/, 1)[0] === "policy") {
+				try {
+					const evidence = queryModelPolicies(options.agentDir ?? getAgentDir(), action.split(/\s+/).slice(1));
+					notify(ctx, JSON.stringify(evidence).replace(/[\u007f-\u009f]/gu, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`), "info");
+				} catch {
+					notify(ctx, "Expected 1..32 exact provider/model identities: /model-tier policy provider/model ...", "warning");
+				}
+				return;
+			}
 			if (action === "reload") {
 				enabledOverride = undefined;
 				await reloadConfig(ctx);
@@ -693,7 +702,7 @@ export default function modelTierRouter(pi: ExtensionAPI, options: ModelTierRout
 				return;
 			}
 			if (action !== "status") {
-				notify(ctx, "Usage: /model-tier status|usage|reload|on|off", "warning");
+				notify(ctx, "Usage: /model-tier status|usage|reload|on|off or policy provider/model ...", "warning");
 				return;
 			}
 			const lines = [

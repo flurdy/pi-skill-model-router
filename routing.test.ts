@@ -1051,6 +1051,22 @@ async function createRouterHarness(
 	};
 }
 
+it("policy command queries fresh global evidence without routing or consent side effects", async () => {
+	const harness = await createRouterHarness({}, { modelPolicies: { "provider/paid": { metered: true, consent: "allow" } } });
+	await harness.invokeCommand("model-tier", "policy provider/paid");
+	assert.match(harness.notifications.at(-1)!, /^\{/, "policy command must return evidence, not usage help");
+	assert.equal(JSON.parse(harness.notifications.at(-1)!).policies[0].consentPolicy, "allow");
+	harness.setModelPolicies({ "provider/paid": { metered: true, consent: "ask" } });
+	await harness.invokeCommand("model-tier", "policy provider/paid");
+	assert.equal(JSON.parse(harness.notifications.at(-1)!).policies[0].consentPolicy, "ask");
+	await harness.invokeCommand("model-tier", "policy opus");
+	assert.match(harness.notifications.at(-1)!, /1..32 exact provider\/model identities/);
+	assert.deepEqual(harness.modelSelectionAttempts, []);
+	assert.deepEqual(harness.thinkingSelections, []);
+	assert.deepEqual(harness.confirmations, []);
+	assert.deepEqual(harness.usageRecords, []);
+});
+
 function lastRouteDecision(harness: RouterHarness): RouteDecisionRecord {
 	const status = harness.notifications.at(-1);
 	assert.ok(status, "expected /model-tier status output");

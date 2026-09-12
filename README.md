@@ -184,6 +184,7 @@ The router never performs post-launch provider fallback. Any future fallback mus
 ```text
 /model-tier status
 /model-tier usage
+/model-tier policy provider/model-id [provider/another-model-id ...]
 /model-tier reload
 /model-tier on
 /model-tier off
@@ -193,6 +194,44 @@ The router never performs post-launch provider fallback. Any future fallback mus
 - `usage` summarizes locally observed Pi response counters by tier and exact model.
 - `reload` rereads router configuration and clears the `on`/`off` override.
 - `on` and `off` are in-memory overrides; they do not edit files or survive Pi `/reload` or restart. `off` prevents new routing attempts, not in-flight consent/setters or restoration already owed; use it while idle for model preservation.
+
+### Launch-free policy evidence prototype
+
+`/model-tier policy` reads the current **global** policy file without reloading active
+routing state, selecting a model, prompting, launching a child, or writing a ledger.
+The package also exports the same query:
+
+```typescript
+import { queryModelPolicies } from "@flurdy/pi-skill-model-router/policy";
+const evidence = queryModelPolicies(agentDir, ["provider/model-id"]);
+```
+
+The caller must obtain `agentDir` from its trusted Pi runtime, not project content or
+model-supplied arguments. The command obtains it from Pi itself. This is a policy
+snapshot, **not launch authorization or proof of an effective model**. It does not
+resolve aliases, query authentication, inspect child configuration, or classify
+Claude CLI, fallback exposure, auxiliary models, or priority service tiers.
+
+Version 1 returns `runtime: "pi"`, `scope: "user"`, a `source` with owner, absolute
+path, status (`loaded`, `invalid`, `unavailable`) and SHA-256 revision of the bytes
+read, plus ordered `policies` rows. Each row contains the literal `model`,
+`meteredClassification`, `consentPolicy`, and structured `basis`: `explicit`,
+`explicit-override`, `inline`, `conflict`, `invalid`, `missing`, or `unavailable`.
+Requests require 1–32 literal provider/model strings of at most 512 characters;
+identities are not normalized or fuzzy-matched. A matching configured string still
+requires independent runtime identity proof.
+
+Explicit valid global policy retains precedence over inline classifications.
+Conflicting inline declarations remain metered/ask. Malformed explicit policies
+return unknown/ask for that model instead of falling through to an inline approval;
+a malformed policy map invalidates the query. Unrelated invalid rows do not hide
+valid rows. These stricter diagnostic rules do not change existing parent routing.
+Raw configuration, parse-error text, credentials and account data are never returned.
+
+Every query re-reads policy. The revision identifies a snapshot, not a lock, expiry,
+user approval, or atomic check-and-launch guarantee. Consumers must separately verify
+source authority, current launch identity, all exposure variants and execution scope.
+No direct-review or child-launch billing bypass is enabled by this prototype.
 
 ## Usage ledger
 

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 
 const [outputPath, expectedConfigPath] = process.argv.slice(2);
 assert.ok(outputPath && expectedConfigPath, "usage: verify-rpc-output.mjs <output> <config-path>");
@@ -28,4 +29,14 @@ assert.ok(
 	"status did not report the external agent configuration path",
 );
 
-console.log("Installed extension command and external configuration verified.");
+const policyResponse = events.find((event) => event.type === "response" && event.id === "policy");
+assert.equal(policyResponse?.success, true, "installed policy command did not execute");
+const policyNotification = events.find((event) => event.type === "extension_ui_request"
+	&& event.method === "notify" && event.message?.startsWith('{"version":1,"runtime":"pi"'));
+assert.ok(policyNotification, "installed policy evidence was not emitted");
+const evidence = JSON.parse(policyNotification.message);
+assert.equal(evidence.source.path, expectedConfigPath);
+assert.equal(evidence.source.revision, createHash("sha256").update(readFileSync(expectedConfigPath)).digest("hex"));
+assert.deepEqual(evidence.policies, [{ model: "fixture/model", meteredClassification: true, consentPolicy: "allow", basis: "explicit" }]);
+assert.equal(events.some((event) => event.type === "agent_start"), false, "policy query started a model turn");
+console.log("Installed commands, external configuration and launch-free policy evidence verified.");
