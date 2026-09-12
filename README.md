@@ -197,9 +197,11 @@ The router never performs post-launch provider fallback. Any future fallback mus
 
 ### Launch-free policy evidence prototype
 
-`/model-tier policy` reads the current **global** policy file without reloading active
-routing state, selecting a model, prompting, launching a child, or writing a ledger.
-The package also exports the same query:
+The model-callable `model_policy_evidence` tool and `/model-tier policy` command read
+the current **global** policy file without reloading active routing state, selecting a
+model, prompting, launching a child, or writing a ledger. The tool accepts
+`{"models":["provider/model-id"]}` and returns the same envelope in both text and
+structured details. The package also exports the query:
 
 ```typescript
 import { queryModelPolicies } from "@flurdy/pi-skill-model-router/policy";
@@ -231,7 +233,11 @@ Raw configuration, parse-error text, credentials and account data are never retu
 Every query re-reads policy. The revision identifies a snapshot, not a lock, expiry,
 user approval, or atomic check-and-launch guarantee. Consumers must separately verify
 source authority, current launch identity, all exposure variants and execution scope.
-No direct-review or child-launch billing bypass is enabled by this prototype.
+The native `delegate-work` adapter may use the tool only after its trusted runtime
+model reporting has resolved the primary and every fallback identity; it passes the
+exact primary model and `fast: false` at launch. Policy evidence skips only the repeated
+billing prompt. Unknown, stale, incomplete, non-Pi, or metered/ask evidence still
+requires current-run consent. Direct-review behavior is unchanged.
 
 ## Usage ledger
 

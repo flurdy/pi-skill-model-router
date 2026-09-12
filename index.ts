@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
+import { Type, type Api, type AssistantMessage, type Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext, Skill } from "@earendil-works/pi-coding-agent";
 import { CONFIG_DIR_NAME, getAgentDir, isToolCallEventType } from "@earendil-works/pi-coding-agent";
 import { loadRouterConfig, queryModelPolicies, type LoadedRouterConfig, type UsageLedgerConfig } from "./config.ts";
@@ -654,6 +654,28 @@ export default function modelTierRouter(pi: ExtensionAPI, options: ModelTierRout
 		await usageLedger?.drainWithin(50);
 		pendingExplicitRoute = undefined;
 		loadedSkills.clear();
+	});
+
+	pi.registerTool({
+		name: "model_policy_evidence",
+		label: "Model policy evidence",
+		description: "Read fresh user-scoped Pi billing policy for exact provider/model identities. This is not launch authorization or model-identity proof.",
+		promptSnippet: "Read fresh Pi billing policy for exact model identities without launching anything",
+		promptGuidelines: [
+			"Use model_policy_evidence only after a trusted runtime has resolved every exact model identity that could be exposed.",
+			"Never treat model_policy_evidence as launch, fanout, task, mutation, publication, or model-identity authorization.",
+		],
+		parameters: Type.Object({
+			models: Type.Array(Type.String({ maxLength: 512 }), { minItems: 1, maxItems: 32, description: "Exact provider/model identities from trusted runtime resolution" }),
+		}),
+		execute: async (_toolCallId, params) => {
+			try {
+				const evidence = queryModelPolicies(options.agentDir ?? getAgentDir(), params.models);
+				return { content: [{ type: "text", text: JSON.stringify(evidence) }], details: evidence };
+			} catch {
+				return { content: [{ type: "text", text: "Expected 1..32 exact provider/model identities" }], details: undefined, isError: true };
+			}
+		},
 	});
 
 	pi.registerCommand("model-tier", {

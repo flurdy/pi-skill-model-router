@@ -792,6 +792,7 @@ interface RouterHarness {
 	loadSkillsForTurn(...names: string[]): Promise<void>;
 	readSkill(name: string): Promise<void>;
 	invokeCommand(name: string, args?: string): Promise<void>;
+	invokeTool(name: string, params: unknown): Promise<any>;
 	selectManually(next: Model<Api>): Promise<void>;
 	setIdle(next: boolean): void;
 	setModelPolicies(policies: Record<string, { metered: boolean; consent?: string }>): void;
@@ -895,6 +896,7 @@ async function createRouterHarness(
 	];
 	const handlers = new Map<string, EventHandler[]>();
 	const registeredCommands = new Map<string, { handler: (args: string, ctx: any) => unknown }>();
+	const registeredTools = new Map<string, { execute: (...args: any[]) => unknown }>();
 	const setModelResults = new Map(
 		Object.entries(options.setModelResults ?? {}).map(([id, results]) => [id, [...results]]),
 	);
@@ -947,6 +949,9 @@ async function createRouterHarness(
 		},
 		registerCommand(name: string, command: { handler: (args: string, ctx: any) => unknown }) {
 			registeredCommands.set(name, command);
+		},
+		registerTool(tool: { name: string; execute: (...args: any[]) => unknown }) {
+			registeredTools.set(tool.name, tool);
 		},
 		getCommands: () => commands,
 		getThinkingLevel: () => thinking,
@@ -1026,6 +1031,11 @@ async function createRouterHarness(
 			assert.ok(command);
 			await command.handler(args, ctx);
 		},
+		async invokeTool(name, params) {
+			const tool = registeredTools.get(name);
+			assert.ok(tool);
+			return tool.execute("tool-id", params, new AbortController().signal, undefined, ctx);
+		},
 		async selectManually(next) {
 			const previousModel = currentModel;
 			currentModel = next;
@@ -1050,6 +1060,29 @@ async function createRouterHarness(
 		usageRecords,
 	};
 }
+
+it("read-only policy tool returns structured fresh evidence without model side effects", async () => {
+	const harness = await createRouterHarness({}, { modelPolicies: { "provider/free": { metered: false } } });
+	const result = await harness.invokeTool("model_policy_evidence", { models: ["provider/free"] });
+	assert.equal(result.isError, undefined);
+	assert.equal(result.content.length, 1);
+	assert.deepEqual(result.details.policies, [{
+		model: "provider/free", meteredClassification: false, consentPolicy: "not-needed", basis: "explicit",
+	}]);
+	assert.equal(JSON.parse(result.content[0].text).source.revision, result.details.source.revision);
+	assert.deepEqual(harness.modelSelectionAttempts, []);
+	assert.deepEqual(harness.thinkingSelections, []);
+	assert.deepEqual(harness.confirmations, []);
+	assert.deepEqual(harness.usageRecords, []);
+});
+
+it("read-only policy tool fails safely without exposing parser details", async () => {
+	const harness = await createRouterHarness({});
+	const result = await harness.invokeTool("model_policy_evidence", { models: ["opus"] });
+	assert.equal(result.isError, true);
+	assert.match(result.content[0].text, /1..32 exact provider\/model identities/);
+	assert.equal(result.details, undefined);
+});
 
 it("policy command queries fresh global evidence without routing or consent side effects", async () => {
 	const harness = await createRouterHarness({}, { modelPolicies: { "provider/paid": { metered: true, consent: "allow" } } });
