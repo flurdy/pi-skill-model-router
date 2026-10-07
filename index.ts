@@ -325,8 +325,10 @@ export default function modelTierRouter(pi: ExtensionAPI, options: ModelTierRout
 					: route.rank < baseline.rank ? "baseline-retain-lower" : "baseline-retain-equal";
 				const noticeKey = `${reason}:${skillName}:${modelId(ctx.model)}`;
 				if (baseline.rank === undefined) {
-					const detail = `baseline rank is ${baseline.tiers.length ? `ambiguous across ${baseline.tiers.join(", ")}` : "unknown"}`;
-					const message = `${detail}; retained ${modelId(ctx.model)} and thinking:${pi.getThinkingLevel()} for implicit ${skillName}; use an explicit /skill:${skillName} to request routing`;
+					const detail = baseline.tiers.length
+						? `belongs to tiers with conflicting ranks (${baseline.tiers.join(", ")})`
+						: "is not enabled in any valid tier";
+					const message = `current model ${modelId(ctx.model)} ${detail}; kept it (thinking:${pi.getThinkingLevel()}) while reading ${skillName}. Use /skill:${skillName} to request routing.`;
 					warnOnce(ctx, noticeKey, message);
 					recordRouteDecision(ctx, metadata.tier, undefined, "not-applicable", reason, [message], "not-applicable", "(baseline)");
 				} else {

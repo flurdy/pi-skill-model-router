@@ -1255,10 +1255,11 @@ describe("first implicit route", () => {
 		assert.deepEqual(harness.modelSelectionAttempts, []);
 		assert.deepEqual(harness.thinkingSelections, []);
 		assert.equal(harness.notificationEvents.at(-1)?.type, "warning");
-		assert.match(harness.notificationEvents.at(-1)?.message ?? "", /explicit \/skill:audit/);
+		assert.equal(harness.notificationEvents.at(-1)?.message,
+			"model-tier: current model unconfigured/economy is not enabled in any valid tier; kept it (thinking:max) while reading audit. Use /skill:audit to request routing.");
 		await harness.invokeCommand("model-tier", "status");
 		assert.equal(lastRouteDecision(harness).reason, "baseline-unknown");
-		assert.match(lastRouteDecision(harness).warnings.join("\n"), /explicit \/skill:/);
+		assert.match(lastRouteDecision(harness).warnings.join("\n"), /not enabled in any valid tier/);
 	});
 
 	it("retains a baseline configured at conflicting ranks", async () => {
@@ -1271,8 +1272,8 @@ describe("first implicit route", () => {
 
 		assert.deepEqual(harness.modelSelectionAttempts, []);
 		assert.equal(harness.notificationEvents.at(-1)?.type, "warning");
-		assert.match(harness.notificationEvents.at(-1)?.message ?? "", /ambiguous across premium, other/);
-		assert.match(harness.notificationEvents.at(-1)?.message ?? "", /explicit \/skill:audit/);
+		assert.equal(harness.notificationEvents.at(-1)?.message,
+			"model-tier: current model provider/premium belongs to tiers with conflicting ranks (premium, other); kept it (thinking:low) while reading audit. Use /skill:audit to request routing.");
 		await harness.invokeCommand("model-tier", "status");
 		assert.equal(lastRouteDecision(harness).reason, "baseline-ambiguous");
 	});
