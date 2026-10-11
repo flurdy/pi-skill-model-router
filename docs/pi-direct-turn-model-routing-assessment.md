@@ -12,7 +12,7 @@ This default deliberately changes the previous contract: routine configured base
 
 ## First-route policy
 
-A baseline is the effective model immediately before a first route attempt, not necessarily the model at session startup. Resolve its exact `provider/model` against enabled candidates in valid configured tiers. Only one distinct matching rank establishes a known baseline. Duplicate candidates or multiple tiers at that same rank do not create ambiguity; conflicting ranks do. Disabled candidates and tiers with invalid routing configuration provide no evidence. A baseline need not appear in the currently available candidate pool to have configured rank evidence.
+A baseline is the effective model immediately before a first route attempt, not necessarily the model at session startup. Resolve its exact `provider/model` against enabled candidates in valid configured tiers. Matching ranks are compared with the requested rank: membership at that rank is equal; a request above or below every matching rank compares as a known lower or higher baseline. Only a request strictly between matching ranks, without membership at its own rank, is ambiguous. Disabled candidates and tiers with invalid routing configuration provide no evidence. A baseline need not appear in the currently available candidate pool to have configured rank evidence.
 
 | Situation | Behavior |
 | --- | --- |
@@ -20,8 +20,8 @@ A baseline is the effective model immediately before a first route attempt, not 
 | First implicit read; known higher baseline, `downshift` | Apply existing selection and spend eligibility. On success, use skill effort or tier thinking and snapshot original model/thinking for restoration. |
 | First implicit read; known higher baseline, `floor` | Retain exact model and thinking with no draw, routed state, usage attribution, or restoration obligation. |
 | First implicit read; equal-rank baseline, either policy | Retain exact model and thinking with no draw or restoration obligation; do not reroll weighted peers or create a same-model route. |
-| First implicit read; unknown, missing, or conflicting-rank baseline | Retain exact model and thinking; explain the uncertainty and explicit skill alternative. No inferred rank. |
-| Same-rank membership in several valid tiers | Treat the baseline rank as known without assigning it an arbitrary owning tier. |
+| First implicit read; unknown, missing, or ambiguous baseline (requested rank strictly between memberships) | Retain exact model and thinking; explain the uncertainty and explicit skill alternative. No inferred rank. |
+| Membership in several valid tiers | Equal when any membership has the requested rank; otherwise compare against all membership ranks without assigning an arbitrary owning tier. |
 | First explicit `/skill:name` | Existing initial selection and effort semantics, including lower tiers/thinking, with existing consent requirements. |
 | Later read after baseline retention | Reevaluate current baseline. A qualifying different-rank request may still route according to policy; retention itself does not establish a routed run. |
 | Nested skill after a successful route | Existing rank-only upgrades and monotonic requested thinking, regardless of explicit/implicit invocation. |

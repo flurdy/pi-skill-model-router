@@ -1262,20 +1262,111 @@ describe("first implicit route", () => {
 		assert.match(lastRouteDecision(harness).warnings.join("\n"), /not enabled in any valid tier/);
 	});
 
-	it("retains a baseline configured at conflicting ranks", async () => {
+	it("retains a baseline whose ranks lie on both sides of the requested tier", async () => {
 		const harness = await createRouterHarness({
 			...skills,
 			other: { tier: "other", rank: 10, candidates: [{ model: "provider/premium", metered: false }] },
 		}, { initialModel: model("provider", "premium") });
-		await harness.loadSkillsForTurn("audit");
-		await harness.readSkill("audit");
+		await harness.loadSkillsForTurn("build");
+		await harness.readSkill("build");
 
 		assert.deepEqual(harness.modelSelectionAttempts, []);
 		assert.equal(harness.notificationEvents.at(-1)?.type, "warning");
 		assert.equal(harness.notificationEvents.at(-1)?.message,
-			"model-tier: current model provider/premium belongs to tiers with conflicting ranks (premium, other); kept it (thinking:low) while reading audit. Use /skill:audit to request routing.");
+			"model-tier: current model provider/premium belongs to tiers ranked both above and below standard (premium, other); kept it (thinking:low) while reading build. Use /skill:build to request routing.");
 		await harness.invokeCommand("model-tier", "status");
 		assert.equal(lastRouteDecision(harness).reason, "baseline-ambiguous");
+	});
+
+	describe("baseline in several tiers at different ranks", () => {
+		const shared = { model: "provider/shared", metered: false };
+		const sharedIn = (...tiers: string[]) => Object.fromEntries(Object.entries(skills).map(([name, skill]) => [
+			name,
+			tiers.includes(skill.tier)
+				? { ...skill, candidates: [{ model: `provider/${skill.tier}`, metered: false }, shared] }
+				: skill,
+		]));
+
+		for (const [skill, tier] of [["build", "standard"], ["audit", "premium"]] as const) {
+			it(`retains it without drawing when it already belongs to the requested ${tier} tier`, async () => {
+				let draws = 0;
+				const harness = await createRouterHarness(sharedIn("standard", "premium"), {
+					initialModel: model("provider", "shared"), initialThinking: "medium", random: () => { draws++; return 0; },
+				});
+				await harness.loadSkillsForTurn(skill);
+				await harness.readSkill(skill);
+
+				assert.equal(draws, 0);
+				assert.deepEqual(harness.modelSelectionAttempts, []);
+				assert.deepEqual(harness.thinkingSelections, []);
+				assert.deepEqual(harness.notificationEvents.at(-1), {
+					message: `model-tier: kept provider/shared (thinking:medium) — already ${tier} for ${skill}`,
+					type: "info",
+				});
+				await harness.invokeCommand("model-tier", "status");
+				assert.equal(lastRouteDecision(harness).reason, "baseline-retain-equal");
+				assert.deepEqual(lastRouteDecision(harness).warnings, []);
+			});
+		}
+
+		it("upgrades through the usual route when every membership ranks below the requested tier", async () => {
+			const harness = await createRouterHarness(sharedIn("economy", "standard"), {
+				initialModel: model("provider", "shared"), initialThinking: "max",
+			});
+			await harness.loadSkillsForTurn("audit");
+			await harness.readSkill("audit");
+
+			assert.deepEqual(harness.modelSelections, ["provider/premium"]);
+			assert.equal(harness.ctx.thinkingLevel, "max");
+			await harness.invokeCommand("model-tier", "status");
+			assert.equal(lastRouteDecision(harness).reason, "initial");
+		});
+
+		it("downshifts when every membership ranks above the requested tier", async () => {
+			const harness = await createRouterHarness(sharedIn("standard", "premium"), {
+				initialModel: model("provider", "shared"), initialThinking: "xhigh",
+			});
+			await harness.loadSkillsForTurn("scan");
+			await harness.readSkill("scan");
+
+			assert.deepEqual(harness.modelSelections, ["provider/economy"]);
+			assert.equal(harness.ctx.thinkingLevel, "medium");
+			await harness.invokeCommand("model-tier", "status");
+			assert.equal(lastRouteDecision(harness).reason, "initial-downshift");
+		});
+
+		it("retains it under floor policy when every membership ranks above the requested tier", async () => {
+			const harness = await createRouterHarness(sharedIn("standard", "premium"), {
+				initialModel: model("provider", "shared"), implicitBaselinePolicy: "floor",
+			});
+			await harness.loadSkillsForTurn("scan");
+			await harness.readSkill("scan");
+
+			assert.deepEqual(harness.modelSelectionAttempts, []);
+			assert.deepEqual(harness.notificationEvents.at(-1), {
+				message: "model-tier: kept provider/shared (thinking:low) — baseline standard, premium above economy for scan",
+				type: "info",
+			});
+			await harness.invokeCommand("model-tier", "status");
+			assert.equal(lastRouteDecision(harness).reason, "baseline-retain-lower");
+		});
+
+		it("ignores a disabled membership that would otherwise match the requested tier", async () => {
+			const harness = await createRouterHarness(sharedIn("economy", "premium"), {
+				initialModel: model("provider", "shared"),
+			});
+			harness.setTierRoute("standard", {
+				rank: 20, thinking: "high",
+				candidates: [{ model: "provider/standard", metered: false }, { ...shared, enabled: false }],
+			});
+			await harness.invokeCommand("model-tier", "reload");
+			await harness.loadSkillsForTurn("build");
+			await harness.readSkill("build");
+
+			assert.deepEqual(harness.modelSelectionAttempts, []);
+			await harness.invokeCommand("model-tier", "status");
+			assert.equal(lastRouteDecision(harness).reason, "baseline-ambiguous");
+		});
 	});
 
 	it("accepts multiple baseline memberships when all have the same rank", async () => {

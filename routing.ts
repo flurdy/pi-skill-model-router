@@ -175,12 +175,27 @@ export function maxThinkingLevel(left: ThinkingLevel, right: ThinkingLevel): Thi
 export function baselineRank(
 	model: ModelIdentity | undefined,
 	tiers: Record<string, TierRoute>,
-): { rank: number | undefined; tiers: string[] } {
+): { ranks: number[]; tiers: string[] } {
 	const identity = model && `${model.provider}/${model.model}`;
 	const matches = Object.entries(tiers).filter(([, route]) => !route.routingDisabled
 		&& route.candidates.some((candidate) => candidate.enabled !== false && candidate.model === identity));
-	const ranks = new Set(matches.map(([, route]) => route.rank));
-	return { rank: ranks.size === 1 ? [...ranks][0] : undefined, tiers: matches.map(([tier]) => tier) };
+	const ranks = [...new Set(matches.map(([, route]) => route.rank))].sort((left, right) => left - right);
+	return { ranks, tiers: matches.map(([tier]) => tier) };
+}
+
+/**
+ * Classify a first implicit request against every baseline membership rank. Membership at the
+ * requested rank retains; a request beyond every rank compares as one known baseline would.
+ */
+export function classifyBaseline(
+	ranks: number[],
+	requested: number,
+): "unknown" | "equal" | "upgrade" | "lower" | "ambiguous" {
+	if (ranks.length === 0) return "unknown";
+	if (ranks.includes(requested)) return "equal";
+	if (requested > ranks[ranks.length - 1]) return "upgrade";
+	if (requested < ranks[0]) return "lower";
+	return "ambiguous";
 }
 
 export function decideTier(active: ActiveTier | undefined, requested: ActiveTier): TierDecision {

@@ -10,6 +10,7 @@ import { addUsageRecord, emptyUsageTotals, formatUsageSummary, normalizeUsage, t
 import {
 	baselineRank,
 	canonicalPath,
+	classifyBaseline,
 	createRouteDecision,
 	decideTier,
 	findExactModel,
@@ -318,15 +319,15 @@ export default function modelTierRouter(pi: ExtensionAPI, options: ModelTierRout
 		let initialImplicitDownshift = false;
 		if (!run && source === "implicit-read" && !route.routingDisabled) {
 			const baseline = baselineRank(modelIdentity(ctx.model), config.tiers);
-			if (baseline.rank === undefined || route.rank === baseline.rank
-				|| (config.implicitBaselinePolicy === "floor" && route.rank < baseline.rank)) {
-				const reason = baseline.rank === undefined
-					? baseline.tiers.length ? "baseline-ambiguous" : "baseline-unknown"
-					: route.rank < baseline.rank ? "baseline-retain-lower" : "baseline-retain-equal";
+			const comparison = classifyBaseline(baseline.ranks, route.rank);
+			if (comparison !== "upgrade" && (comparison !== "lower" || config.implicitBaselinePolicy === "floor")) {
+				const reason = comparison === "unknown" ? "baseline-unknown"
+					: comparison === "ambiguous" ? "baseline-ambiguous"
+					: comparison === "lower" ? "baseline-retain-lower" : "baseline-retain-equal";
 				const noticeKey = `${reason}:${skillName}:${modelId(ctx.model)}`;
-				if (baseline.rank === undefined) {
-					const detail = baseline.tiers.length
-						? `belongs to tiers with conflicting ranks (${baseline.tiers.join(", ")})`
+				if (comparison === "unknown" || comparison === "ambiguous") {
+					const detail = comparison === "ambiguous"
+						? `belongs to tiers ranked both above and below ${metadata.tier} (${baseline.tiers.join(", ")})`
 						: "is not enabled in any valid tier";
 					const message = `current model ${modelId(ctx.model)} ${detail}; kept it (thinking:${pi.getThinkingLevel()}) while reading ${skillName}. Use /skill:${skillName} to request routing.`;
 					warnOnce(ctx, noticeKey, message);
@@ -341,7 +342,7 @@ export default function modelTierRouter(pi: ExtensionAPI, options: ModelTierRout
 				}
 				return;
 			}
-			initialImplicitDownshift = route.rank < baseline.rank;
+			initialImplicitDownshift = comparison === "lower";
 		}
 
 		const requestedThinking = metadata.effort ?? route.thinking;
