@@ -460,9 +460,11 @@ export default function modelTierRouter(pi: ExtensionAPI, options: ModelTierRout
 			: candidatePolicy.consentPolicy === "allow" ? "configured" : "confirmed";
 		const originalModel = run?.originalModel ?? ctx.model;
 		const originalThinking = run?.originalThinking ?? pi.getThinkingLevel();
+		// Only the candidate actually being selected may express a preference; route floors still apply.
+		const preferredThinking = candidate.thinking ?? requestedThinking;
 		const selectedThinking = run
-			? maxThinkingLevel(maxThinkingLevel(run.requestedThinking, requestedThinking), pi.getThinkingLevel())
-			: source === "implicit-read" && !initialImplicitDownshift ? maxThinkingLevel(requestedThinking, originalThinking) : requestedThinking;
+			? maxThinkingLevel(maxThinkingLevel(run.requestedThinking, preferredThinking), pi.getThinkingLevel())
+			: source === "implicit-read" && !initialImplicitDownshift ? maxThinkingLevel(preferredThinking, originalThinking) : preferredThinking;
 		expectedModelSelection = modelId(target);
 		let switched = false;
 		try {

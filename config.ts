@@ -111,6 +111,7 @@ function parseTier(name: string, value: unknown, path: string, warnings: string[
 	const candidates: TierRoute["candidates"] = [];
 	const candidateIndexes = new Map<string, number>();
 	let invalidWeightedCandidate = false;
+	let invalidCandidateThinking = false;
 	for (const [index, candidate] of input.candidates.entries()) {
 		if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
 			warnings.push(`${path}: tier ${name} candidate ${index + 1} must be an object`);
@@ -144,6 +145,17 @@ function parseTier(name: string, value: unknown, path: string, warnings: string[
 			if (selection === "weighted-random") invalidWeightedCandidate = true;
 			continue;
 		}
+		// An invalid preference disables the tier rather than dropping the candidate, so neither
+		// selection nor its billing classification silently changes.
+		let thinking: ThinkingLevel | undefined;
+		if (item.thinking !== undefined) {
+			if (typeof item.thinking === "string" && THINKING_LEVELS.has(item.thinking as ThinkingLevel)) {
+				thinking = item.thinking as ThinkingLevel;
+			} else {
+				warnings.push(`${path}: tier ${name} candidate ${index + 1} thinking must be one of ${[...THINKING_LEVELS].join(", ")}; tier routing disabled`);
+				invalidCandidateThinking = true;
+			}
+		}
 		const firstIndex = candidateIndexes.get(item.model);
 		if (firstIndex !== undefined) {
 			warnings.push(`${path}: tier ${name} candidate ${index + 1} duplicates ${item.model} from candidate ${firstIndex}; duplicate entries are retained`);
@@ -155,13 +167,14 @@ function parseTier(name: string, value: unknown, path: string, warnings: string[
 			...(item.metered === undefined ? {} : { metered: item.metered }),
 			...(weight === undefined ? {} : { weight }),
 			...(item.enabled === undefined ? {} : { enabled: item.enabled }),
+			...(thinking === undefined ? {} : { thinking }),
 		});
 	}
 	return {
 		rank: input.rank,
 		thinking: input.thinking as ThinkingLevel,
 		selection,
-		routingDisabled: invalidWeightedCandidate || invalidSelectionPolicy || undefined,
+		routingDisabled: invalidWeightedCandidate || invalidSelectionPolicy || invalidCandidateThinking || undefined,
 		candidates,
 	};
 }

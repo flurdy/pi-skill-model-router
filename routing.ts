@@ -12,6 +12,8 @@ export interface ModelCandidate {
 	metered?: boolean;
 	weight?: number;
 	enabled?: boolean;
+	/** Preferred thinking when this candidate is selected; overrides skill effort and tier thinking, never route floors. */
+	thinking?: ThinkingLevel;
 }
 
 export type SelectionPolicy = "first-available" | "weighted-random";

@@ -86,14 +86,15 @@ From a source checkout, copy `./model-tier-router.example.json` instead.
 | `routeImplicitSkillReads` | Allows loaded skill files read by the model to request a route. |
 | `implicitBaselinePolicy` | Global-only `downshift` (default) or `floor` for first implicit reads. Invalid values warn and use `floor`. |
 | `tiers.<name>.rank` | Orders nested upgrades and classifies first-implicit baselines. |
-| `tiers.<name>.thinking` | Default thinking level when the skill omits `effort`. |
+| `tiers.<name>.thinking` | Default thinking level when neither the selected candidate nor the skill sets one. |
 | `tiers.<name>.selection` | `first-available` (default) or `weighted-random`. |
 | `tiers.<name>.candidates` | Exact models and, for weighted selection, integer weights from 1 to 100. |
 | `tiers.<name>.candidates[].enabled` | Set to `false` to temporarily exclude a candidate without removing its configuration. |
+| `tiers.<name>.candidates[].thinking` | Optional preferred thinking when this candidate is selected; see [thinking precedence](#thinking-precedence). |
 | `modelPolicies.<provider/model>` | Global exact-model `metered` classification and optional `consent`. |
 | `usageLedger` | Optional bounded local response-counter telemetry. Disabled by default. |
 
-Invalid selection policies or malformed weighted candidates disable that tier rather than silently changing selection or paid share. Disabled weighted candidates must retain a valid weight so re-enabling them does not silently change the configured distribution:
+Invalid selection policies, malformed weighted candidates, or an invalid candidate `thinking` disable that tier rather than silently changing selection or paid share. Disabled weighted candidates must retain a valid weight so re-enabling them does not silently change the configured distribution:
 
 ```json
 {
@@ -155,6 +156,27 @@ Routing boundaries:
 - On Pi 0.85.0, extension model/thinking setters change session history but not global defaults. Older supported Pi versions may persist defaults; see the assessment below.
 
 See the [direct-turn routing assessment](docs/pi-direct-turn-model-routing-assessment.md) for the boundary analysis.
+
+### Thinking precedence
+
+A successfully selected candidate's thinking is chosen in this order:
+
+1. `candidates[].thinking`
+2. the skill's `effort`
+3. `tiers.<name>.thinking`
+
+The override lives on the candidate within its tier, so one exact model can have different preferences in different tiers:
+
+```json
+{
+  "tiers": {
+    "economy": { "rank": 10, "thinking": "medium", "candidates": [{ "model": "provider/model-id", "thinking": "low" }] },
+    "premium": { "rank": 40, "thinking": "xhigh", "candidates": [{ "model": "provider/model-id", "thinking": "high" }] }
+  }
+}
+```
+
+A candidate preference is calibration, not a cap. It may lower thinking for a first explicit route or a permitted first implicit downshift. A first implicit upgrade still keeps at least the current thinking, and a nested upgrade never lowers the run's requested thinking. Pi may then clamp the result to what the model supports. Only the candidate actually switched to contributes a preference: retained nested tiers, declines, unavailable candidates, and failed switches use the skill's `effort` or the requested tier's `thinking`. Status shows the requested and effective thinking; the last route decision shows the selected candidate, including its preference.
 
 ### Candidate selection
 

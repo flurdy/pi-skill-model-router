@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, Skill } from "@earendil-works/pi-coding-agent";
-import { loadRouterConfig, type UsageLedgerConfig } from "./config.ts";
+import { loadRouterConfig, queryModelPolicies, type UsageLedgerConfig } from "./config.ts";
 import modelTierRouter, { reconcileUsageLedger, type UsageLedgerPort } from "./index.ts";
 import type { UsageRecordV1 } from "./usage.ts";
 import {
@@ -700,6 +700,110 @@ describe("configuration", () => {
 		);
 		assert.match(result.warnings.join("\n"), /metered must be boolean when provided/);
 	});
+
+	it("loads optional candidate thinking in both selection policies without changing other fields", () => {
+		const root = mkdtempSync(join(tmpdir(), "model-tier-router-"));
+		const agentDir = join(root, "agent");
+		const cwd = join(root, "project");
+		mkdirSync(agentDir, { recursive: true });
+		writeFileSync(join(agentDir, "model-tier-router.json"), JSON.stringify({ tiers: {
+			ordered: {
+				rank: 20,
+				thinking: "high",
+				candidates: [{ model: "provider/a", metered: false, thinking: "low" }, { model: "provider/b", metered: false }],
+			},
+			weighted: {
+				rank: 30,
+				thinking: "high",
+				selection: "weighted-random",
+				candidates: [
+					{ model: "provider/repeated", weight: 3, thinking: "off" },
+					{ model: "provider/repeated", weight: 1, thinking: "max" },
+				],
+			},
+		} }));
+
+		const result = loadRouterConfig({ agentDir, cwd, projectTrusted: false });
+		assert.equal(result.config.tiers.ordered.thinking, "high");
+		assert.equal(result.config.tiers.ordered.routingDisabled, undefined);
+		assert.deepEqual(result.config.tiers.ordered.candidates, [
+			{ model: "provider/a", metered: false, thinking: "low" },
+			{ model: "provider/b", metered: false },
+		]);
+		assert.equal(result.config.tiers.weighted.routingDisabled, undefined);
+		assert.deepEqual(result.config.tiers.weighted.candidates, [
+			{ model: "provider/repeated", weight: 3, thinking: "off" },
+			{ model: "provider/repeated", weight: 1, thinking: "max" },
+		]);
+		assert.deepEqual(
+			selectRouteCandidate(result.config.tiers.weighted, [model("provider", "repeated")], () => true, () => 0.9).pool,
+			[{ model: "provider/repeated", weight: 3 }, { model: "provider/repeated", weight: 1 }],
+		);
+		assert.equal(selectRouteCandidate(result.config.tiers.weighted, [model("provider", "repeated")], () => true, () => 0.9).candidate?.thinking, "max");
+		assert.match(result.warnings.join("\n"), /duplicates provider\/repeated/);
+		assert.doesNotMatch(result.warnings.join("\n"), /thinking/);
+	});
+
+	it("disables a tier with malformed candidate thinking but keeps its billing classification", () => {
+		const root = mkdtempSync(join(tmpdir(), "model-tier-router-"));
+		const agentDir = join(root, "agent");
+		const cwd = join(root, "project");
+		mkdirSync(agentDir, { recursive: true });
+		const invalidValues: unknown[] = ["turbo", "", "High", 3, null, ["low"]];
+		const tiers: Record<string, unknown> = {};
+		for (const [index, value] of invalidValues.entries()) {
+			tiers[`ordered${index}`] = {
+				rank: 20 + index,
+				thinking: "high",
+				candidates: [{ model: `provider/ordered${index}`, metered: false, thinking: value }, { model: "provider/fallback", metered: false }],
+			};
+		}
+		tiers.weighted = {
+			rank: 40,
+			thinking: "high",
+			selection: "weighted-random",
+			candidates: [{ model: "provider/paid", metered: true, weight: 1, thinking: "ultra" }, { model: "provider/free", metered: false, weight: 1 }],
+		};
+		writeFileSync(join(agentDir, "model-tier-router.json"), JSON.stringify({ tiers }));
+
+		const result = loadRouterConfig({ agentDir, cwd, projectTrusted: false });
+		const warnings = result.warnings.join("\n");
+		for (const index of invalidValues.keys()) {
+			const tier = result.config.tiers[`ordered${index}`]!;
+			assert.equal(tier.routingDisabled, true, `ordered${index}`);
+			assert.deepEqual(tier.candidates, [{ model: `provider/ordered${index}`, metered: false }, { model: "provider/fallback", metered: false }]);
+			assert.equal(selectRouteCandidate(tier, [model("provider", `ordered${index}`), model("provider", "fallback")]).candidate, undefined);
+			assert.match(warnings, new RegExp(`tier ordered${index} candidate 1 thinking must be one of off, minimal, low, medium, high, xhigh, max; tier routing disabled`));
+		}
+		assert.equal(result.config.tiers.weighted.routingDisabled, true);
+		assert.deepEqual(result.config.tiers.weighted.candidates.map((candidate) => candidate.weight), [1, 1]);
+		assert.equal(selectRouteCandidate(result.config.tiers.weighted, [model("provider", "paid"), model("provider", "free")]).candidate, undefined);
+		assert.equal(result.config.modelPolicies["provider/paid"]?.metered, true);
+		assert.deepEqual(
+			queryModelPolicies(agentDir, ["provider/paid", "provider/ordered0"]).policies.map((policy) => [policy.meteredClassification, policy.basis]),
+			[[true, "inline"], [false, "inline"]],
+		);
+	});
+
+	it("replaces global candidate thinking with a trusted project tier", () => {
+		const root = mkdtempSync(join(tmpdir(), "model-tier-router-"));
+		const agentDir = join(root, "agent");
+		const cwd = join(root, "project");
+		mkdirSync(agentDir, { recursive: true });
+		mkdirSync(join(cwd, ".pi"), { recursive: true });
+		writeFileSync(join(agentDir, "model-tier-router.json"), JSON.stringify({
+			modelPolicies: { "provider/shared": { metered: false } },
+			tiers: { standard: { rank: 20, thinking: "high", candidates: [{ model: "provider/shared", thinking: "xhigh" }] } },
+		}));
+		writeFileSync(join(cwd, ".pi", "model-tier-router.json"), JSON.stringify({
+			tiers: { standard: { rank: 20, thinking: "medium", candidates: [{ model: "provider/shared" }] } },
+		}));
+
+		const result = loadRouterConfig({ agentDir, cwd, projectTrusted: true });
+		assert.equal(result.config.tierSources.standard, "project");
+		assert.deepEqual(result.config.tiers.standard.candidates, [{ model: "provider/shared" }]);
+		assert.equal(result.config.tiers.standard.thinking, "medium");
+	});
 });
 
 describe("usage ledger reload", () => {
@@ -759,7 +863,7 @@ interface HarnessSkill {
 	costPolicy?: string;
 	meteredPolicy?: string;
 	metered?: boolean;
-	candidates?: Array<{ model: string; metered?: boolean; weight?: number; enabled?: boolean }>;
+	candidates?: Array<{ model: string; metered?: boolean; weight?: number; enabled?: boolean; thinking?: string }>;
 	selection?: "first-available" | "weighted-random";
 	configure?: boolean;
 	available?: boolean;
@@ -2628,5 +2732,175 @@ describe("extension lifecycle", () => {
 		await harness.invokeCommand("model-tier", "status");
 		assert.equal(lastRouteDecision(harness).consentPolicy, "not-applicable");
 		assert.equal(lastRouteDecision(harness).consentBasis, "not-applicable");
+	});
+});
+
+describe("candidate thinking preferences", () => {
+	function statusLine(harness: RouterHarness, prefix: string): string | undefined {
+		return harness.notifications.at(-1)?.split("\n").find((line) => line.startsWith(prefix));
+	}
+
+	it("prefers candidate thinking over skill effort and tier thinking, then restores the original", async () => {
+		const harness = await createRouterHarness(
+			{ build: { tier: "standard", rank: 20, effort: "medium", candidates: [{ model: "provider/standard", metered: false, thinking: "low" }] } },
+			{ initialThinking: "xhigh" },
+		);
+		await harness.invokeSkill("build");
+		assert.deepEqual(harness.thinkingSelections, ["low"]);
+		await harness.invokeCommand("model-tier", "status");
+		assert.equal(statusLine(harness, "requested thinking: "), "requested thinking: low");
+		assert.equal(statusLine(harness, "active thinking: "), "active thinking: low");
+		assert.deepEqual(lastRouteDecision(harness).candidate, { model: "provider/standard", metered: false, thinking: "low" });
+		assert.equal(lastRouteDecision(harness).thinkingLevel, "low");
+		await harness.emit("message_end", { message: assistantMessage("provider", "standard") });
+		assert.equal(harness.usageRecords[0]?.thinking, "low");
+
+		await harness.emit("agent_settled");
+		assert.deepEqual(harness.modelSelections, ["provider/standard", "provider/original"]);
+		assert.deepEqual(harness.thinkingSelections, ["low", "xhigh"]);
+	});
+
+	it("falls back to skill effort, then tier thinking, when a candidate omits thinking", async () => {
+		const harness = await createRouterHarness({
+			quick: { tier: "economy", rank: 10, effort: "medium" },
+			build: { tier: "standard", rank: 20 },
+		});
+		await harness.invokeSkill("quick");
+		await harness.emit("agent_settled");
+		await harness.invokeSkill("build");
+		assert.deepEqual(harness.thinkingSelections, ["medium", "low", "high"]);
+	});
+
+	it("applies the drawn weighted candidate's thinking without changing selection shares", async () => {
+		const candidates = [
+			{ model: "provider/a", metered: false, weight: 1, thinking: "minimal" },
+			{ model: "provider/b", metered: false, weight: 3, thinking: "xhigh" },
+		];
+		for (const [draw, expectedModel, expectedThinking] of [[0, "provider/a", "minimal"], [0.9, "provider/b", "xhigh"]] as const) {
+			const harness = await createRouterHarness(
+				{ build: { tier: "standard", rank: 20, effort: "medium", selection: "weighted-random", candidates } },
+				{ random: () => draw },
+			);
+			await harness.invokeSkill("build");
+			assert.deepEqual(harness.modelSelections, [expectedModel]);
+			assert.deepEqual(harness.thinkingSelections, [expectedThinking]);
+			await harness.invokeCommand("model-tier", "status");
+			assert.deepEqual(lastRouteDecision(harness).selectionPool, [{ model: "provider/a", weight: 1 }, { model: "provider/b", weight: 3 }]);
+		}
+	});
+
+	it("applies distinct preferences for the same model in different tiers", async () => {
+		const harness = await createRouterHarness({
+			quick: { tier: "economy", rank: 10, candidates: [{ model: "provider/shared", metered: false, thinking: "low" }] },
+			deep: { tier: "premium", rank: 40, candidates: [{ model: "provider/shared", metered: false, thinking: "xhigh" }] },
+		});
+		await harness.invokeSkill("quick");
+		await harness.emit("agent_settled");
+		await harness.invokeSkill("deep");
+		assert.deepEqual(harness.modelSelections, ["provider/shared", "provider/original", "provider/shared"]);
+		assert.deepEqual(harness.thinkingSelections, ["low", "low", "xhigh"]);
+	});
+
+	it("does not let a lower candidate preference cap a nested upgrade or clamped request", async () => {
+		const harness = await createRouterHarness(
+			{
+				deep: { tier: "limited", rank: 20, candidates: [{ model: "provider/limited", metered: false, thinking: "xhigh" }] },
+				upgrade: { tier: "capable", rank: 40, effort: "high", candidates: [{ model: "provider/capable", metered: false, thinking: "low" }] },
+			},
+			{ clampThinking: (requested, modelId) => modelId === "limited" && requested === "xhigh" ? "high" : requested },
+		);
+		await harness.invokeSkill("deep");
+		await harness.invokeCommand("model-tier", "status");
+		assert.equal(statusLine(harness, "requested thinking: "), "requested thinking: xhigh");
+		assert.equal(statusLine(harness, "active thinking: "), "active thinking: high");
+		await harness.invokeSkill("upgrade");
+		assert.deepEqual(harness.modelSelections, ["provider/limited", "provider/capable"]);
+		assert.deepEqual(harness.thinkingSelections, ["high", "xhigh"]);
+		await harness.invokeCommand("model-tier", "status");
+		assert.equal(lastRouteDecision(harness).reason, "upgrade");
+		assert.equal(lastRouteDecision(harness).candidate?.thinking, "low");
+		assert.equal(lastRouteDecision(harness).thinkingLevel, "xhigh");
+	});
+
+	it("lets a preference lower a first implicit downshift but keeps the first implicit upgrade floor", async () => {
+		const downshift = await createRouterHarness(
+			{
+				scan: { tier: "economy", rank: 10, effort: "medium", candidates: [{ model: "provider/economy", metered: false, thinking: "minimal" }] },
+				build: { tier: "standard", rank: 20 },
+			},
+			{ initialModel: model("provider", "standard"), initialThinking: "high" },
+		);
+		await downshift.loadSkillsForTurn("scan");
+		await downshift.readSkill("scan");
+		assert.deepEqual(downshift.modelSelections, ["provider/economy"]);
+		assert.deepEqual(downshift.thinkingSelections, ["minimal"]);
+
+		const upgrade = await createRouterHarness(
+			{ build: { tier: "standard", rank: 20, candidates: [{ model: "provider/standard", metered: false, thinking: "low" }] } },
+			{ initialThinking: "medium" },
+		);
+		await upgrade.loadSkillsForTurn("build");
+		await upgrade.readSkill("build");
+		assert.deepEqual(upgrade.modelSelections, ["provider/standard"]);
+		assert.deepEqual(upgrade.thinkingSelections, ["medium"]);
+	});
+
+	it("retains an equal-rank baseline without applying its candidate preference", async () => {
+		const harness = await createRouterHarness(
+			{ build: { tier: "standard", rank: 20, candidates: [{ model: "provider/standard", metered: false, thinking: "minimal" }] } },
+			{ initialModel: model("provider", "standard"), initialThinking: "high" },
+		);
+		await harness.loadSkillsForTurn("build");
+		await harness.readSkill("build");
+		assert.deepEqual(harness.modelSelectionAttempts, []);
+		assert.deepEqual(harness.thinkingSelections, []);
+		await harness.invokeCommand("model-tier", "status");
+		assert.equal(lastRouteDecision(harness).reason, "baseline-retain-equal");
+	});
+
+	it("never applies a declined or failed target's preference to the active model", async () => {
+		const preferred = [{ model: "provider/premium", metered: false, thinking: "max" }];
+		const declined = await createRouterHarness(
+			{
+				build: { tier: "standard", rank: 20, effort: "medium" },
+				audit: { tier: "premium", rank: 40, candidates: [{ model: "provider/premium", metered: true, thinking: "max" }] },
+			},
+			{ confirm: false },
+		);
+		await declined.invokeSkill("build");
+		await declined.invokeSkill("audit");
+		assert.equal(declined.confirmations.length, 1);
+		assert.deepEqual(declined.thinkingSelections, ["medium", "high"]);
+
+		const failed = await createRouterHarness(
+			{ build: { tier: "standard", rank: 20, effort: "medium" }, audit: { tier: "premium", rank: 40, candidates: preferred } },
+			{ setModelResults: { "provider/premium": [false] } },
+		);
+		await failed.invokeSkill("build");
+		await failed.invokeSkill("audit");
+		assert.equal(failed.ctx.model.id, "standard");
+		assert.deepEqual(failed.thinkingSelections, ["medium", "high"]);
+
+		const initialFailure = await createRouterHarness(
+			{ audit: { tier: "premium", rank: 40, candidates: preferred } },
+			{ setModelResults: { "provider/premium": [false] } },
+		);
+		await initialFailure.invokeSkill("audit");
+		assert.deepEqual(initialFailure.thinkingSelections, []);
+	});
+
+	it("raises retained nested routes from the requested tier, not unselected candidate preferences", async () => {
+		const harness = await createRouterHarness({
+			build: { tier: "standard", rank: 20, candidates: [{ model: "provider/standard", metered: false, thinking: "minimal" }] },
+			quick: { tier: "economy", rank: 10, candidates: [{ model: "provider/economy", metered: false, thinking: "max" }] },
+			missing: { tier: "unavailable", rank: 50, available: false, candidates: [{ model: "provider/unavailable", metered: false, thinking: "max" }] },
+		});
+		await harness.invokeSkill("build");
+		await harness.invokeSkill("quick");
+		await harness.invokeSkill("missing");
+		assert.deepEqual(harness.modelSelections, ["provider/standard"]);
+		assert.deepEqual(harness.thinkingSelections, ["minimal", "high"]);
+		await harness.invokeCommand("model-tier", "status");
+		assert.equal(statusLine(harness, "requested thinking: "), "requested thinking: high");
 	});
 });
