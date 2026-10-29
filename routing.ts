@@ -23,11 +23,13 @@ export interface SelectionPoolEntry {
 	weight: number;
 }
 
-export type CandidateExclusionReason = "disabled" | "not-available";
+export type CandidateExclusionReason = "disabled" | "disabled-by-policy" | "not-available";
 
 export interface CandidateExclusion {
 	model: string;
 	reason: CandidateExclusionReason;
+	/** Matching disabled-model rules, for policy exclusions. */
+	detail?: string;
 }
 
 export interface CandidateSelection {
@@ -223,6 +225,7 @@ export function selectRouteCandidate(
 	available: Model<Api>[],
 	isEligible: (candidate: ModelCandidate) => boolean = () => true,
 	random: () => number = Math.random,
+	denied: ReadonlyMap<string, readonly string[]> = new Map(),
 ): CandidateSelection {
 	const policy = route.selection ?? "first-available";
 	if (route.routingDisabled) return { candidate: undefined, policy, pool: [], exclusions: [] };
@@ -231,6 +234,11 @@ export function selectRouteCandidate(
 	const availableCandidates = route.candidates.filter((candidate) => {
 		if (candidate.enabled === false) {
 			exclusions.push({ model: candidate.model, reason: "disabled" });
+			return false;
+		}
+		const rules = denied.get(candidate.model);
+		if (rules) {
+			exclusions.push({ model: candidate.model, reason: "disabled-by-policy", detail: rules.join("; ") });
 			return false;
 		}
 		if (!availableIds.has(candidate.model)) {

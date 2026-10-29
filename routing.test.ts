@@ -877,6 +877,7 @@ interface RouterHarnessOptions {
 	onSetModel?: (target: Model<Api>) => Promise<void>;
 	clampThinking?: (requested: string, modelId: string) => string;
 	confirm?: boolean;
+	disabledModels?: unknown;
 	hasUI?: boolean;
 	idle?: boolean;
 	legacyRestoreAfterRun?: boolean;
@@ -896,6 +897,8 @@ interface RouterHarness {
 	loadSkillsForTurn(...names: string[]): Promise<void>;
 	readSkill(name: string): Promise<void>;
 	invokeCommand(name: string, args?: string): Promise<void>;
+	writeDisabledModels(policy: unknown): void;
+	cwd: string;
 	invokeTool(name: string, params: unknown): Promise<any>;
 	selectManually(next: Model<Api>): Promise<void>;
 	setIdle(next: boolean): void;
@@ -918,6 +921,13 @@ async function createRouterHarness(
 	const agentDir = join(root, "agent");
 	const cwd = join(root, "project");
 	const skillDir = join(root, "skills");
+	const homeDir = join(root, "home");
+	const writeDisabledModels = (policy: unknown) => writeFileSync(
+		join(homeDir, ".agents", "disabled-models.json"),
+		typeof policy === "string" ? policy : JSON.stringify(policy),
+	);
+	mkdirSync(join(homeDir, ".agents"), { recursive: true });
+	if (options.disabledModels !== undefined) writeDisabledModels(options.disabledModels);
 	mkdirSync(agentDir, { recursive: true });
 	mkdirSync(join(cwd, ".pi"), { recursive: true });
 	mkdirSync(skillDir, { recursive: true });
@@ -1079,6 +1089,7 @@ async function createRouterHarness(
 
 	modelTierRouter(pi, {
 		agentDir,
+		homeDir,
 		random: options.random,
 		usageLedger: {
 			start() {},
@@ -1110,6 +1121,8 @@ async function createRouterHarness(
 
 	return {
 		ctx,
+		cwd,
+		writeDisabledModels,
 		emit,
 		stageSkill,
 		startSkill,
@@ -2473,6 +2486,96 @@ describe("extension lifecycle", () => {
 			{ model: "provider/unavailable", reason: "not-available" },
 		]);
 		assert.deepEqual(harness.modelSelectionAttempts, ["provider/standard", "provider/original"]);
+	});
+
+	it("skips workspace-disabled candidates and reports the rule", async () => {
+		const harness = await createRouterHarness({
+			build: {
+				tier: "standard",
+				rank: 20,
+				candidates: [
+					{ model: "provider/denied", metered: false },
+					{ model: "provider/standard", metered: false },
+				],
+			},
+		});
+		harness.writeDisabledModels({
+			version: 1,
+			rules: [{ id: "work", roots: [harness.cwd], models: ["provider/denied"], reason: "not licensed here" }],
+		});
+
+		await harness.invokeSkill("build");
+		await harness.invokeCommand("model-tier", "status");
+		assert.deepEqual(harness.modelSelectionAttempts, ["provider/standard"]);
+		assert.deepEqual(lastRouteDecision(harness).candidateExclusions, [
+			{ model: "provider/denied", reason: "disabled-by-policy", detail: "work: not licensed here" },
+		]);
+		assert.match(harness.notifications.at(-1) ?? "", /disabled models: .*disabled-models\.json \(matched rules: work\)/);
+	});
+
+	it("removes disabled candidates from a weighted pool and stops when every candidate is disabled", async () => {
+		const harness = await createRouterHarness({
+			build: {
+				tier: "standard",
+				rank: 20,
+				selection: "weighted-random",
+				candidates: [
+					{ model: "provider/denied", metered: false, weight: 100 },
+					{ model: "provider/allowed", metered: false, weight: 1 },
+				],
+			},
+		}, { random: () => 0 });
+		const deny = (models: string[]) => harness.writeDisabledModels({ version: 1, rules: [{ id: "work", roots: [harness.cwd], models }] });
+		deny(["provider/denied"]);
+		await harness.invokeSkill("build");
+		await harness.invokeCommand("model-tier", "status");
+		assert.deepEqual(lastRouteDecision(harness).selectionPool, [{ model: "provider/allowed", weight: 1 }]);
+		assert.deepEqual(harness.modelSelectionAttempts, ["provider/allowed"]);
+
+		await harness.emit("agent_settled");
+		deny(["provider/denied", "provider/allowed"]);
+		await harness.invokeSkill("build");
+		await harness.invokeCommand("model-tier", "status");
+		assert.equal(lastRouteDecision(harness).reason, "no-eligible-candidate");
+		assert.deepEqual(harness.modelSelectionAttempts, ["provider/allowed", "provider/original"]);
+		assert.equal(harness.ctx.model.id, "original");
+	});
+
+	it("ignores rules for other paths and stops routing on a malformed policy", async () => {
+		const harness = await createRouterHarness({ build: { tier: "standard", rank: 20 } });
+		harness.writeDisabledModels({ version: 1, rules: [{ id: "elsewhere", roots: [`${harness.cwd}-other`], models: ["provider/standard"] }] });
+		await harness.invokeSkill("build");
+		assert.deepEqual(harness.modelSelectionAttempts, ["provider/standard"]);
+
+		await harness.emit("agent_settled");
+		harness.writeDisabledModels("{ not json");
+		await harness.invokeSkill("build");
+		await harness.invokeCommand("model-tier", "status");
+		assert.deepEqual(harness.modelSelectionAttempts, ["provider/standard", "provider/original"]);
+		assert.equal(harness.ctx.model.id, "original");
+		assert.equal(lastRouteDecision(harness).reason, "disabled-models-policy-invalid");
+		assert.match(harness.notifications.join("\n"), /disabled-model policy .*malformed JSON; routing stopped/);
+		assert.match(harness.notifications.at(-1) ?? "", /disabled models: .*invalid: malformed JSON/);
+	});
+
+	it("rechecks the policy after consent and before switching", async () => {
+		let harness: RouterHarness | undefined;
+		harness = await createRouterHarness(
+			{ build: { tier: "premium", rank: 30, metered: true } },
+			{
+				modelPolicies: { "provider/premium": { metered: true, consent: "ask" } },
+				onConfirm: async () => harness?.writeDisabledModels({
+					version: 1,
+					rules: [{ id: "late", roots: [harness.cwd], models: ["provider/premium"] }],
+				}),
+			},
+		);
+		await harness.invokeSkill("build");
+		await harness.invokeCommand("model-tier", "status");
+		assert.equal(harness.confirmations.length, 1);
+		assert.deepEqual(harness.modelSelectionAttempts, []);
+		assert.equal(lastRouteDecision(harness).reason, "disabled-by-policy-after-confirmation");
+		assert.equal(harness.ctx.model.id, "original");
 	});
 
 	it("draws once for each successful higher-tier weighted upgrade", async () => {

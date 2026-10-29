@@ -124,6 +124,41 @@ A trusted project can override top-level options and complete tier entries in:
 
 A project tier replaces the global tier with the same name. Other global tiers remain available. Project `implicitBaselinePolicy`, `modelPolicies`, and `usageLedger` are ignored. Project candidates cannot weaken a global metered classification. The existing `enabled` and `routeImplicitSkillReads` options remain project-overridable.
 
+### Disabled models
+
+To keep particular models out of routing for some directories (for licence, legal or preference
+reasons), add a user-owned deny policy at the fixed path `~/.agents/disabled-models.json`:
+
+```json
+{
+  "version": 1,
+  "rules": [
+    {
+      "id": "client-work",
+      "roots": ["/home/me/Code/client", "/home/me/Code/client-api"],
+      "models": ["provider/model-id"],
+      "reason": "Not approved for client code"
+    }
+  ]
+}
+```
+
+- A rule applies when Pi's working directory is a root or one of its descendants, compared on
+  path-component boundaries both as written and after resolving symlinks. Symlinked member
+  repositories that live elsewhere need their own root; there is no workspace discovery.
+- `models` lists exact `provider/model` identities. Matching rules accumulate; nothing re-enables a
+  denied model. `agents` (`claude`, `codex`, `gemini`) is accepted for other tools sharing the
+  file and is ignored by the router.
+- Denied candidates are excluded before first-available selection or the weighted draw, so the
+  next allowed candidate can route. The route decision reports `disabled-by-policy` with the
+  matching rule and reason. If no allowed candidate remains, the current model is retained.
+- The file is re-read for every route attempt and again after a consent prompt, before switching.
+- A missing file changes nothing. A malformed, unreadable or unsupported file (unknown fields
+  included) stops all routing with a warning until it is fixed; `/model-tier status` reports it.
+- The policy only narrows selection: it never grants consent or changes metered classification.
+  It does not block manual `/model` selection, restoration of the original model, an already
+  active route, or other launch paths such as subagents.
+
 ## Routing behavior
 
 A skill declares capability and reasoning needs in frontmatter:

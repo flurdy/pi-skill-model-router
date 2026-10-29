@@ -1,10 +1,12 @@
 import { readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { Type, type Api, type AssistantMessage, type Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext, Skill } from "@earendil-works/pi-coding-agent";
 import { CONFIG_DIR_NAME, getAgentDir, isToolCallEventType } from "@earendil-works/pi-coding-agent";
 import { loadRouterConfig, queryModelPolicies, type LoadedRouterConfig, type UsageLedgerConfig } from "./config.ts";
+import { describeDisabledModels, evaluateDisabledModels } from "./disabled-models.ts";
 import { UsageLedger } from "./usage-ledger.ts";
 import { addUsageRecord, emptyUsageTotals, formatUsageSummary, normalizeUsage, type UsageRecordV1, type UsageTotals } from "./usage.ts";
 import {
@@ -110,6 +112,8 @@ export async function reconcileUsageLedger(
 
 export interface ModelTierRouterOptions {
 	agentDir?: string;
+	/** Home directory containing the fixed .agents/disabled-models.json policy. */
+	homeDir?: string;
 	random?: () => number;
 	usageLedger?: UsageLedgerPort;
 }
@@ -129,6 +133,7 @@ export default function modelTierRouter(pi: ExtensionAPI, options: ModelTierRout
 	let latestRouteDecision: RouteDecisionRecord | undefined;
 	const noticeKeys = new Set<string>();
 	const unavailableWarnings: string[] = [];
+	const homeDir = options.homeDir ?? homedir();
 
 	function isEnabled(): boolean {
 		return enabledOverride ?? loaded?.config.enabled ?? true;
@@ -305,6 +310,14 @@ export default function modelTierRouter(pi: ExtensionAPI, options: ModelTierRout
 
 		const currentEffectiveTier = run?.activeDecision.effectiveTier ?? metadata.tier;
 		const activeRestoration: RouteDecisionRecord["restoration"] = run ? "pending" : "not-applicable";
+		const disabledModels = evaluateDisabledModels(homeDir, ctx.cwd);
+		if (disabledModels.status === "invalid") {
+			const warning = `disabled-model policy ${disabledModels.path} is invalid: ${disabledModels.error}; routing stopped, retained ${modelId(ctx.model)}`;
+			warnOnce(ctx, `disabled-models-invalid:${disabledModels.error}`, warning);
+			const routeDecision = recordRouteDecision(ctx, metadata.tier, undefined, "not-applicable", "disabled-models-policy-invalid", [warning], activeRestoration, currentEffectiveTier);
+			if (run) activateDecision(run, routeDecision, skillName);
+			return;
+		}
 		const route = Object.hasOwn(config.tiers, metadata.tier)
 			? config.tiers[metadata.tier]
 			: undefined;
@@ -392,6 +405,7 @@ export default function modelTierRouter(pi: ExtensionAPI, options: ModelTierRout
 				return ctx.hasUI || !requiresConsentConfirmation(policy);
 			},
 			options.random,
+			disabledModels.deniedModels,
 		);
 		const candidate = selection.candidate;
 		const target = candidate ? findExactModel(candidate, available) : undefined;
@@ -450,6 +464,18 @@ export default function modelTierRouter(pi: ExtensionAPI, options: ModelTierRout
 				const warning = `declined ${exposure} ${candidate.model} for ${metadata.tier}`;
 				warnOnce(ctx, `${exposure}:declined:${metadata.tier}`, warning);
 				const routeDecision = recordRouteDecision(ctx, metadata.tier, candidate, "declined", `${exposure}-declined`, [warning], activeRestoration, currentEffectiveTier, candidatePolicy, selection);
+				if (run) activateDecision(run, routeDecision, skillName);
+				return;
+			}
+			// Confirmation can take arbitrarily long; the policy may have changed meanwhile.
+			const recheck = evaluateDisabledModels(homeDir, ctx.cwd);
+			if (recheck.status === "invalid" || recheck.deniedModels.has(candidate.model)) {
+				if (run && recheck.status !== "invalid") raiseRunThinking(run, requestedThinking, skillName, ctx);
+				const warning = recheck.status === "invalid"
+					? `disabled-model policy became invalid during confirmation (${recheck.error}); routing stopped, retained ${modelId(ctx.model)}`
+					: `${candidate.model} was disabled for this workspace during confirmation; retained ${modelId(ctx.model)}`;
+				warnOnce(ctx, `disabled-after-confirmation:${candidate.model}:${recheck.status}`, warning);
+				const routeDecision = recordRouteDecision(ctx, metadata.tier, candidate, "confirmed", "disabled-by-policy-after-confirmation", [warning], activeRestoration, currentEffectiveTier, candidatePolicy, selection);
 				if (run) activateDecision(run, routeDecision, skillName);
 				return;
 			}
@@ -746,6 +772,7 @@ export default function modelTierRouter(pi: ExtensionAPI, options: ModelTierRout
 				`manual model override: ${manualModelOverride}`,
 				`config: ${loaded?.loadedPaths.join(", ") || "defaults"}`,
 				`config warnings: ${loaded?.warnings.join("; ") || "(none)"}`,
+				`disabled models: ${describeDisabledModels(evaluateDisabledModels(homeDir, ctx.cwd))}`,
 				`last route decision: ${latestRouteDecision ? JSON.stringify(latestRouteDecision) : "(none)"}`,
 				`warnings: ${unavailableWarnings.join("; ") || "(none)"}`,
 				`usage ledger: ${usageLedger ? JSON.stringify(usageLedger.health()) : "disabled"}`,

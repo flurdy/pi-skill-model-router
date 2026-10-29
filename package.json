@@ -24,6 +24,7 @@
   },
   "files": [
     "config.ts",
+    "disabled-models.ts",
     "index.ts",
     "routing.ts",
     "usage-ledger.ts",

@@ -13,6 +13,7 @@ assert.deepEqual(packageJson.exports, { ".": "./index.ts", "./policy": "./config
 const allowedPackageFiles = [
 	"README.md",
 	"config.ts",
+	"disabled-models.ts",
 	"index.ts",
 	"model-tier-router.example.json",
 	"model-tier-router.opinionated.example.json",
