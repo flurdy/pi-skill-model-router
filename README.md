@@ -1,69 +1,24 @@
 # Pi Skill Model Router
 
-A provider-neutral [Pi](https://pi.dev) extension that maps portable skill metadata such as `model-tier: standard` to exact models configured on your machine. It also applies skill `effort` as Pi's thinking level and restores the previous model and thinking level when the run finishes.
+A provider-neutral [Pi](https://pi.dev) extension that maps skill `model-tier` metadata to exact models in your local policy, applies `effort` as thinking, and restores the previous model and thinking when the routed run settles. No provider defaults are shipped.
 
-Exact provider/model IDs and spend policy stay in local JSON configuration. The extension ships no provider defaults.
-
-## Related repositories
-
-These independently usable repositories are installed and versioned separately, but complement
-the router's model-selection role:
-
-- [flurdy/ai-tools](https://github.com/flurdy/ai-tools) — complementary Pi and Claude Code tooling, plus this router's pre-extraction history.
-- [flurdy/agent-skills](https://github.com/flurdy/agent-skills) — shared cross-client skills whose `model-tier` and `effort` metadata this extension can enforce in Pi.
-
-### Companion tools
-
-These tools complement the router but do different jobs:
-
-| Tool | Role |
-|---|---|
-| [Pi statusline](https://github.com/flurdy/ai-tools/tree/main/pi/statusline) | Displays the active model, thinking level, tokens, cache stats, and Pi-configured estimated cost in Pi's footer. |
-| [`token-dashboard`](https://github.com/flurdy/agent-skills/tree/main/skills/token-dashboard) | Read-only current-session and UTC-week token telemetry across Pi, Claude Code, and Codex, with optional OpenRouter analytics. |
-| [`model-update-check`](https://github.com/flurdy/agent-skills/tree/main/skills/model-update-check) | Checks configured model IDs against Pi's active catalog and public metadata, then flags models worth reviewing. |
-
-The router controls selection and consent; these tools display or audit what happened. Their token and cost figures are telemetry or local estimates, not provider billing or subscription quota.
-
-## Requirements
-
-- Pi 0.80.6 or newer
-- Node.js 22.19 or newer for development
+[Install](#install) · [Configure](#configure) · [Commands](#commands) · [Routing behavior](#routing-behavior) · [Development](#development)
 
 ## Install
 
-Pin an immutable commit or tag:
+Requires Pi **0.80.6+**. Pin an immutable commit or tag:
 
 ```bash
 pi install git:github.com/flurdy/pi-skill-model-router@<commit-or-tag>
 ```
 
-The package installs the extension only. It does not create or change your routing policy.
-
-For a one-off local development run from a checkout:
-
-```bash
-pi -e ./index.ts
-```
-
-To dogfood the mutable checkout globally:
-
-```bash
-make apply
-```
-
-This links the checkout into `~/.pi/agent/extensions/model-tier-router`. The immutable Git package
-install remains the reproducible deployment path. Restart Pi after first linking the extension;
-`/reload` is sufficient for later source or configuration changes once Pi has loaded it.
+This installs the extension only, not a routing policy. New or reloaded Pi sessions load it.
 
 ## Configure
 
-List the models available through your current Pi authentication:
-
-```bash
-pi --list-models
-```
-
-Copy an example, then replace every placeholder with an exact `provider/model-id` from that output:
+1. List models available through your current Pi authentication: `pi --list-models`.
+2. Copy the minimal example to your global agent directory (default path below).
+3. Replace **every** placeholder with an exact `provider/model-id` and review its cost policy.
 
 ```bash
 cp ~/.pi/agent/git/github.com/flurdy/pi-skill-model-router/model-tier-router.example.json \
@@ -71,273 +26,71 @@ cp ~/.pi/agent/git/github.com/flurdy/pi-skill-model-router/model-tier-router.exa
 $EDITOR ~/.pi/agent/model-tier-router.json
 ```
 
-From a source checkout, copy `./model-tier-router.example.json` instead.
+From a checkout, copy `./model-tier-router.example.json` instead. Once loaded, `/model-tier reload` rereads configuration.
 
-| Example | Use case |
-|---|---|
-| [`model-tier-router.example.json`](model-tier-router.example.json) | Minimal three-tier policy with first-available selection and the usage ledger disabled. Review or remove its placeholder premium-model `consent: "allow"` policy. |
-| [`model-tier-router.opinionated.example.json`](model-tier-router.opinionated.example.json) | July 2026 snapshot with weighted OpenAI, Anthropic, and Google candidates plus bounded local usage telemetry. Treat every model ID and cost classification as local policy to reassess. |
+**Review the minimal example's premium `consent: "allow"`: it permits metered routing without another prompt.** Change it to `"ask"` or remove that approval unless intended. The [weighted example](model-tier-router.opinionated.example.json) is illustrative, not a current model or cost recommendation.
 
-### Core configuration
-
-| Field | Purpose |
-|---|---|
-| `enabled` | Enables routing when the extension loads. |
-| `routeImplicitSkillReads` | Allows loaded skill files read by the model to request a route. |
-| `implicitBaselinePolicy` | Global-only `downshift` (default) or `floor` for first implicit reads. Invalid values warn and use `floor`. |
-| `tiers.<name>.rank` | Orders nested upgrades and classifies first-implicit baselines. |
-| `tiers.<name>.thinking` | Default thinking level when neither the selected candidate nor the skill sets one. |
-| `tiers.<name>.selection` | `first-available` (default) or `weighted-random`. |
-| `tiers.<name>.candidates` | Exact models and, for weighted selection, integer weights from 1 to 100. |
-| `tiers.<name>.candidates[].enabled` | Set to `false` to temporarily exclude a candidate without removing its configuration. |
-| `tiers.<name>.candidates[].thinking` | Optional preferred thinking when this candidate is selected; see [thinking precedence](#thinking-precedence). |
-| `modelPolicies.<provider/model>` | Global exact-model `metered` classification and optional `consent`. |
-| `usageLedger` | Optional bounded local response-counter telemetry. Disabled by default. |
-
-Invalid selection policies, malformed weighted candidates, or an invalid candidate `thinking` disable that tier rather than silently changing selection or paid share. Disabled weighted candidates must retain a valid weight so re-enabling them does not silently change the configured distribution:
-
-```json
-{
-  "model": "anthropic/claude-sonnet-5",
-  "weight": 1,
-  "enabled": false
-}
-```
-
-Shared skills should use these portable tiers:
-
-| Tier | Intended use |
-|---|---|
-| `economy` | Low-risk, deterministic work |
-| `standard` | Normal workflows and bounded implementation |
-| `premium` | Work requiring substantial judgment or where mistakes are costly |
-
-Configure them with increasing ranks. Private or project-specific tier names are also supported.
-
-### Project overrides
-
-A trusted project can override top-level options and complete tier entries in:
-
-```text
-<project>/.pi/model-tier-router.json
-```
-
-A project tier replaces the global tier with the same name. Other global tiers remain available. Project `implicitBaselinePolicy`, `modelPolicies`, and `usageLedger` are ignored. Project candidates cannot weaken a global metered classification. The existing `enabled` and `routeImplicitSkillReads` options remain project-overridable.
-
-### Disabled models
-
-To keep particular models out of routing for some directories (for licence, legal or preference
-reasons), add a user-owned deny policy at the fixed path `~/.agents/disabled-models.json`:
-
-```json
-{
-  "version": 1,
-  "rules": [
-    {
-      "id": "client-work",
-      "roots": ["/home/me/Code/client", "/home/me/Code/client-api"],
-      "models": ["provider/model-id"],
-      "reason": "Not approved for client code"
-    }
-  ]
-}
-```
-
-- A rule applies when Pi's working directory is a root or one of its descendants, compared on
-  path-component boundaries both as written and after resolving symlinks. Symlinked member
-  repositories that live elsewhere need their own root; there is no workspace discovery.
-- `models` lists exact `provider/model` identities. Matching rules accumulate; nothing re-enables a
-  denied model. `agents` (`claude`, `codex`, `gemini`) is accepted for other tools sharing the
-  file and is ignored by the router.
-- Denied candidates are excluded before first-available selection or the weighted draw, so the
-  next allowed candidate can route. The route decision reports `disabled-by-policy` with the
-  matching rule and reason. If no allowed candidate remains, the current model is retained.
-- The file is re-read for every route attempt and again after a consent prompt, before switching.
-- A missing file changes nothing. A malformed, unreadable or unsupported file (unknown fields
-  included) stops all routing with a warning until it is fixed; `/model-tier status` reports it.
-- The policy only narrows selection: it never grants consent or changes metered classification.
-  It does not block manual `/model` selection, restoration of the original model, an already
-  active route, or other launch paths such as subagents.
-
-## Routing behavior
-
-A skill declares capability and reasoning needs in frontmatter:
+Shared skills normally request `economy`, `standard`, or `premium` with increasing configured ranks:
 
 ```yaml
-model-tier: premium
-effort: xhigh
+model-tier: standard
+effort: high
 ```
 
-Supported effort values are `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`.
-
-The first successful route snapshots the current model and thinking level. Nested skills may select only higher-ranked tiers or raise requested thinking. Pi can clamp effective thinking to model capabilities; the router retains the higher request for later upgrades. The original model and thinking are restored when the run settles.
-
-For a **first implicit skill read**, the current exact `provider/model` is resolved against enabled candidates of valid configured tiers; disabled candidates/tiers provide no evidence. A model may belong to several tiers at different ranks. If one membership has the requested rank, the baseline is equal. If the requested rank is above or below every membership rank, it compares as a known higher or lower baseline. Equal-rank, unknown, or ambiguous baselines (requested rank strictly between memberships) retain **both model and thinking**, without a candidate draw, routed run, or restoration obligation.
-
-**Default change:** `implicitBaselinePolicy: "downshift"` permits a known higher-ranked baseline to route to a lower tier through the usual spend gates, using the skill's effort (or tier thinking). Thus standard/high can become economy/medium. Set global `implicitBaselinePolicy: "floor"` before loading this version to retain the previous no-downshift behavior. Upward first-implicit routes still preserve at least current thinking. Status reports the policy and successful `initial-downshift` decisions; retained decisions use effective tier `(baseline)`. Known equal- or higher-ranked retainments for valid requested tiers emit one terse informational notice per skill and model. Invalid requested tiers keep their actionable configuration warning regardless of baseline rank. Unknown or ambiguous baselines remain warnings and point to the explicit skill command because their routing intent is unresolved.
-
-These are configured-rank guarantees, not model-quality or cost judgments. A loaded skill read can trigger routing even when read only for context; the router cannot infer execution intent. For a deliberate model choice, run `/model-tier off` **while idle, before selecting the model or starting work**. This prevents explicit and implicit routing; `/model-tier on` resumes it. Startup and same-model choices cannot be detected automatically. `floor` prevents downward routing, not all routing.
-
-A **first explicit skill command**, while routing is enabled, may select its requested tier and thinking even for a higher or unknown baseline, subject to consent. Once a routed run exists, nested no-downshift rules apply to either invocation source.
-
-Routing boundaries:
-
-- Explicit `/skill:name` commands route after Pi accepts and expands the skill.
-- Model-initiated skill reads route only when `routeImplicitSkillReads` is enabled and the read path exactly matches a skill loaded for that turn.
-- Plain prompts do not select a tier.
-- Skills queued while another run is streaming keep the active route because Pi has no safe message-scoped routing boundary for them.
-- An idle manual selection establishes the next baseline, not a persistent pin; `downshift` may subsequently lower it. An observed model selection during a turn stops further routing and cancels automatic restoration, even before the first routed skill. Pending consent/switch operations recheck state before applying thinking or claiming a route.
-- Pi exposes no startup-choice or selection-initiator provenance and emits no event for same-model selections. Other extensions' non-restore selections are conservatively treated as manual; only the router's expected target event is ignored. This is not an atomic model-selection lock.
-- On Pi 0.85.0, extension model/thinking setters change session history but not global defaults. Older supported Pi versions may persist defaults; see the assessment below.
-
-See the [direct-turn routing assessment](docs/pi-direct-turn-model-routing-assessment.md) for the boundary analysis.
-
-### Thinking precedence
-
-A successfully selected candidate's thinking is chosen in this order:
-
-1. `candidates[].thinking`
-2. the skill's `effort`
-3. `tiers.<name>.thinking`
-
-The override lives on the candidate within its tier, so one exact model can have different preferences in different tiers:
-
-```json
-{
-  "tiers": {
-    "economy": { "rank": 10, "thinking": "medium", "candidates": [{ "model": "provider/model-id", "thinking": "low" }] },
-    "premium": { "rank": 40, "thinking": "xhigh", "candidates": [{ "model": "provider/model-id", "thinking": "high" }] }
-  }
-}
-```
-
-A candidate preference is calibration, not a cap. It may lower thinking for a first explicit route or a permitted first implicit downshift. A first implicit upgrade still keeps at least the current thinking, and a nested upgrade never lowers the run's requested thinking. Pi may then clamp the result to what the model supports. Only the candidate actually switched to contributes a preference: retained nested tiers, declines, unavailable candidates, and failed switches use the skill's `effort` or the requested tier's `thinking`. Status shows the requested and effective thinking; the last route decision shows the selected candidate, including its preference.
-
-### Candidate selection
-
-Selection is bounded to configured, currently available candidates and happens before the provider request:
-
-- `first-available` selects the first enabled configured candidate that is currently available. If that candidate cannot route, the router stops instead of trying the next one.
-- `weighted-random` filters disabled, unavailable, or route-ineligible candidates, then makes one independent draw using candidate weights. Weights represent expected run share, not tokens, cost, quota, latency, or quality.
-- A declined prompt or failed model switch keeps the current model. The router does not redraw or try another candidate.
-
-The router never performs post-launch provider fallback. Any future fallback must remain bounded to named candidates, resolve identity and cost classification before launch, obtain consent for the complete fallback set when needed, and stop on exhaustion.
-
-### Metering and consent
-
-`modelPolicies` is the preferred source for exact-model cost classification. The router never guesses cost from provider, model name, authentication, skill metadata, historical spend, or the usage ledger.
-
-| Effective policy | Explicit skill | Implicit or headless route |
-|---|---|---|
-| Unmetered | Routes without prompting | Eligible |
-| Metered with `consent: "allow"` | Routes without prompting | Eligible |
-| Metered with `consent: "ask"` | Prompts before routing | Excluded |
-| Unknown cost | Prompts before routing | Excluded |
-
-`ask` is the default consent for metered models. A declined prompt or unavailable confirmation UI keeps the current model. Legacy inline candidate classifications remain supported, but unclassified candidates without an exact global policy are treated as unknown cost.
+Exact identities and spend policy belong in local JSON, not shared skill metadata. See the [configuration reference](docs/configuration.md) for fields, trusted-project overrides, disabled models, and the optional usage ledger.
 
 ## Commands
 
-```text
-/model-tier status
-/model-tier usage
-/model-tier policy provider/model-id [provider/another-model-id ...]
-/model-tier reload
-/model-tier on
-/model-tier off
-```
+| Command | Use |
+|---|---|
+| `/model-tier status` | Inspect policy, route/restoration state, paths, warnings, ledger health, and the last decision. |
+| `/model-tier usage` | Summarize locally observed response counters by tier and exact model; requires the global ledger. |
+| `/model-tier policy provider/model-id [provider/another-model-id ...]` | Read fresh global cost policy without routing or launching a model. |
+| `/model-tier reload` | Reread configuration and clear the in-memory `on`/`off` override. |
+| `/model-tier on` | Enable new routing attempts in this Pi session. |
+| `/model-tier off` | Disable new explicit and implicit routing attempts in this Pi session. |
 
-- `status` reports the implicit baseline policy, active route, restoration state, configuration paths and actionable warnings, ledger health, and the last route decision. Normal retained-baseline notices are represented by the decision's reason, model, and thinking fields rather than accumulated as warnings.
-- `usage` summarizes locally observed Pi response counters by tier and exact model.
-- `reload` rereads router configuration and clears the `on`/`off` override.
-- `on` and `off` are in-memory overrides; they do not edit files or survive Pi `/reload` or restart. `off` prevents new routing attempts, not in-flight consent/setters or restoration already owed; use it while idle for model preservation.
+`on`/`off` do not edit files or survive Pi `/reload` or restart. **Use `off` while idle, before selecting a model or starting work**, to preserve a deliberate choice: it does not cancel in-flight consent/setters or restoration already owed.
 
-### Launch-free policy evidence prototype
+The `policy` command and model-callable `model_policy_evidence` tool return a policy snapshot, **not launch authorization or model-identity proof**. See the [policy-evidence reference](docs/policy-evidence.md) for the API, trust boundary, and consumer requirements.
 
-The model-callable `model_policy_evidence` tool and `/model-tier policy` command read
-the current **global** policy file without reloading active routing state, selecting a
-model, prompting, launching a child, or writing a ledger. The tool accepts
-`{"models":["provider/model-id"]}` and returns the same envelope in both text and
-structured details. The package also exports the query:
+## Routing behavior
 
-```typescript
-import { queryModelPolicies } from "@flurdy/pi-skill-model-router/policy";
-const evidence = queryModelPolicies(agentDir, ["provider/model-id"]);
-```
+| Trigger | First route | Once a routed run exists |
+|---|---|---|
+| Explicit `/skill:name` accepted and expanded by Pi | Can select the requested tier and thinking, even from a higher or unknown baseline; spend gates still apply. | Can upgrade tier or raise requested thinking, never downshift. |
+| Model reads a skill loaded for that turn | Requires `routeImplicitSkillReads`; compares the current exact model's configured ranks. | Same nested no-downshift rule. |
+| Plain prompt | Does not select a tier. | Queued skills while streaming keep the active route; there is no safe per-message routing boundary. |
 
-The caller must obtain `agentDir` from its trusted Pi runtime, not project content or
-model-supplied arguments. The command obtains it from Pi itself. This is a policy
-snapshot, **not launch authorization or proof of an effective model**. It does not
-resolve aliases, query authentication, inspect child configuration, or classify
-Claude CLI, fallback exposure, auxiliary models, or priority service tiers.
+- **Default `implicitBaselinePolicy: "downshift"` can lower the first implicit route's model rank and thinking.** Set global `"floor"` to prevent that downward route; it does not disable upward routing.
+- Equal-rank, unknown, or ambiguous first-implicit baselines retain **both model and thinking**, without a draw or restoration obligation. These are configured-rank rules, not quality or cost judgments.
+- A loaded skill read can route even when read only for context. Idle manual model selection is a baseline, not a persistent pin; startup and same-model choices cannot be detected automatically.
+- An observed model selection during a turn stops routing and cancels automatic restoration. Otherwise, a successful route snapshots the original model/thinking for restoration when the run settles; Pi may clamp thinking to model capabilities.
+- Exact global `modelPolicies` govern cost. Metered/ask and unknown-cost routes require explicit confirmation and are excluded from implicit or headless routing. Declines and failed switches keep the current model: no redraw or post-launch provider fallback.
 
-Version 1 returns `runtime: "pi"`, `scope: "user"`, a `source` with owner, absolute
-path, status (`loaded`, `invalid`, `unavailable`) and SHA-256 revision of the bytes
-read, plus ordered `policies` rows. Each row contains the literal `model`,
-`meteredClassification`, `consentPolicy`, and structured `basis`: `explicit`,
-`explicit-override`, `inline`, `conflict`, `invalid`, `missing`, or `unavailable`.
-Requests require 1–32 literal provider/model strings of at most 512 characters;
-identities are not normalized or fuzzy-matched. A matching configured string still
-requires independent runtime identity proof.
-
-Explicit valid global policy retains precedence over inline classifications.
-Conflicting inline declarations remain metered/ask. Malformed explicit policies
-return unknown/ask for that model instead of falling through to an inline approval;
-a malformed policy map invalidates the query. Unrelated invalid rows do not hide
-valid rows. These stricter diagnostic rules do not change existing parent routing.
-Raw configuration, parse-error text, credentials and account data are never returned.
-
-Every query re-reads policy. The revision identifies a snapshot, not a lock, expiry,
-user approval, or atomic check-and-launch guarantee. Consumers must separately verify
-source authority, current launch identity, all exposure variants and execution scope.
-The native `delegate-work` adapter may use the tool only after its trusted runtime
-model reporting has resolved the primary and every fallback identity; it passes the
-exact primary model and `fast: false` at launch. Policy evidence skips only the repeated
-billing prompt. Unknown, stale, incomplete, non-Pi, or metered/ask evidence still
-requires current-run consent. Direct-review behavior is unchanged.
-
-## Usage ledger
-
-When enabled globally, the ledger writes bounded daily JSONL files under:
-
-```text
-~/.pi/agent/model-tier-router/usage/v1/
-```
-
-It stores Pi-normalized token counters, not provider billing or subscription quota. It does **not** store prompts, responses, credentials, account identifiers, response IDs, or repository/session paths. Writes are best-effort and never delay routing or restoration. Separate Pi subprocesses are not combined into a parent run.
-
-Configure retention with `usageLedger.retentionDays` and `usageLedger.maxBytes`.
+See the [routing reference](docs/routing.md) for baseline comparisons, thinking precedence, selection, consent, and lifecycle limitations.
 
 ## Development
 
-Use the Node version in `.nvmrc`:
+Use Node **22.19.0** from `.nvmrc`:
 
 ```bash
 fnm install
 fnm exec --using=.nvmrc npm ci
 fnm exec --using=.nvmrc npm run check
-```
-
-With `nvm`, run `nvm install && nvm use` before the same npm commands. `npm run check` runs tests, typechecking, and the package allowlist check.
-
-After committing package changes, verify an isolated immutable Git install:
-
-```bash
+# After committing, verify an isolated immutable Git install:
 fnm exec --using=.nvmrc npm run verify:git-install
 ```
 
-Pi loads `index.ts` directly; no build output is required.
+With `nvm`, run `nvm install && nvm use` before the npm commands. Checks cover tests, typechecking, and the exact package allowlist. Pi loads `index.ts` directly; no build is needed.
 
-## Design notes
+For a one-off checkout run, use `pi -e ./index.ts`. `make apply` instead links the mutable checkout into `~/.pi/agent/extensions/model-tier-router`; restart Pi after first linking. Once loaded, Pi `/reload` can pick up later source/configuration changes. Immutable Git installation remains the reproducible deployment path.
 
-- [Metered consent](docs/model-tier-metered-consent-decision.md)
-- [Weighted selection](docs/model-tier-weighted-selection-decision.md)
-- [Usage ledger](docs/model-tier-usage-ledger-spike.md)
-- [Direct-turn routing](docs/pi-direct-turn-model-routing-assessment.md)
+## Related tools and design notes
 
-## Contributing
-
-Issues and pull requests are welcome, especially for routing-policy use cases and Pi compatibility fixes.
+- [ai-tools](https://github.com/flurdy/ai-tools): complementary Pi/Claude Code tooling and pre-extraction history; [agent-skills](https://github.com/flurdy/agent-skills): portable cross-client skills. Both are independently usable and separately installed/versioned.
+- [Pi statusline](https://github.com/flurdy/ai-tools/tree/main/pi/statusline), [`token-dashboard`](https://github.com/flurdy/agent-skills/tree/main/skills/token-dashboard), and [`model-update-check`](https://github.com/flurdy/agent-skills/tree/main/skills/model-update-check) display telemetry or audit models; they do not control router consent. Token/cost figures are local estimates, not provider billing or subscription quota.
+- Design rationale: [metered consent](docs/model-tier-metered-consent-decision.md), [weighted selection](docs/model-tier-weighted-selection-decision.md), [usage ledger](docs/model-tier-usage-ledger-spike.md), and [direct-turn routing](docs/pi-direct-turn-model-routing-assessment.md).
 
 ## License
 
